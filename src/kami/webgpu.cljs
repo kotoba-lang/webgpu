@@ -76,24 +76,40 @@
             idx' (into idx (map #(+ base %) [0 1 2 0 2 3]))]
         (recur (rest fs) (+ base 4) v' idx')))))
 
+;; eye (camera world pos) is packed into the spare .w of sun_dir/sun_col/sky so the
+;; uniform stays 112 bytes. Lighting: hemisphere ambient + Lambert sun + Blinn-Phong
+;; specular + a Fresnel rim, Reinhard tonemap + gamma. Material params (metallic/rough)
+;; will move into the EDN render-IR as the next layer (passes/materials as datoms).
 (def ^:private SHADER "
 struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32> };
 @group(0) @binding(0) var<uniform> g: G;
-struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32>, @location(1) col: vec3<f32> };
+struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32>, @location(1) col: vec3<f32>, @location(2) wpos: vec3<f32> };
 @vertex
 fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
       @location(2) m0: vec4<f32>, @location(3) m1: vec4<f32>, @location(4) m2: vec4<f32>, @location(5) m3: vec4<f32>,
       @location(6) color: vec4<f32>) -> VO {
   let model = mat4x4<f32>(m0, m1, m2, m3);
-  var o: VO; o.clip = g.vp * model * vec4<f32>(pos, 1.0);
-  o.n = normalize((model * vec4<f32>(normal, 0.0)).xyz); o.col = color.rgb; return o;
+  let world = model * vec4<f32>(pos, 1.0);
+  var o: VO; o.clip = g.vp * world;
+  o.n = normalize((model * vec4<f32>(normal, 0.0)).xyz); o.col = color.rgb; o.wpos = world.xyz; return o;
 }
 @fragment
 fn fs(i: VO) -> @location(0) vec4<f32> {
+  let N = normalize(i.n);
   let L = normalize(-g.sun_dir.xyz);
-  let lambert = max(dot(normalize(i.n), L), 0.0);
-  let amb = mix(vec3<f32>(0.18,0.2,0.26), g.sky.rgb*0.5, normalize(i.n).y*0.5+0.5);
-  return vec4<f32>(i.col*(amb + lambert*g.sun_col.rgb*0.85), 1.0);
+  let eye = vec3<f32>(g.sun_dir.w, g.sun_col.w, g.sky.w);
+  let V = normalize(eye - i.wpos);
+  let H = normalize(L + V);
+  let ndl = max(dot(N, L), 0.0);
+  // hemisphere ambient: sky above, a cool ground bounce below
+  let amb = mix(vec3<f32>(0.20,0.22,0.26), g.sky.rgb*0.65, N.y*0.5+0.5);
+  // Blinn-Phong specular (sun only) + soft Fresnel rim toward the sky
+  let spec = pow(max(dot(N, H), 0.0), 48.0) * 0.35;
+  let rim  = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.25;
+  var c = i.col * (amb + ndl * g.sun_col.rgb * 0.9) + g.sun_col.rgb * spec + g.sky.rgb * rim;
+  c = c / (c + vec3<f32>(1.0));                 // Reinhard tonemap
+  c = pow(c, vec3<f32>(1.0/2.2));               // gamma
+  return vec4<f32>(c, 1.0);
 }")
 
 (def ^:private MAX-INST 16384)
@@ -174,9 +190,10 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
         ;; globals uniform: vp(16) + sun_dir(4) + sun_col(4) + sky(4)
         gf (js/Float32Array. 28)]
     (.set gf vp 0)
-    (.set gf (clj->js [(sun-dir 0) (sun-dir 1) (sun-dir 2) 0]) 16)
-    (.set gf (clj->js [(sun 0) (sun 1) (sun 2) 1]) 20)
-    (.set gf (clj->js [(horizon 0) (horizon 1) (horizon 2) 1]) 24)
+    ;; .w of each carries the camera eye (x,y,z) for view-dependent lighting
+    (.set gf (clj->js [(sun-dir 0) (sun-dir 1) (sun-dir 2) (nth eye 0)]) 16)
+    (.set gf (clj->js [(sun 0) (sun 1) (sun 2) (nth eye 1)]) 20)
+    (.set gf (clj->js [(horizon 0) (horizon 1) (horizon 2) (nth eye 2)]) 24)
     (.writeBuffer queue gbuf 0 gf)
     ;; instance buffer: per instance model(16) + color(4) = 20 floats
     (let [idata (js/Float32Array. (* (count insts) 20))]
