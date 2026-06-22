@@ -2,12 +2,15 @@
   "kami-webgpu — a WebGPU renderer driven entirely from CLJ/EDN (hiccup for WebGPU).
 
    ClojureScript calls the browser WebGPU JS API directly — no Rust, no wasm, no string
-   marshaling. The render-IR is a plain CLJS map: globals (camera/sky/sun) + a flat
-   instance list. `init!` sets up the device/pipeline once; `draw!` records a frame from
-   the EDN each requestAnimationFrame. The heavy rasterization is the GPU's; CLJS only
-   records light per-frame commands. This is the web execution of the same EDN render
-   spec a native Rust/wgpu executor interprets (ADR-0001). The render-IR shape + pure
-   data constructors live in kami.webgpu.ir (.cljc, cross-platform).")
+   marshaling. TWO kinds of data drive it:
+     • the render GRAPH (shaders, targets, samplers, pipelines, an ordered :passes
+       array) — EDN describing HOW a frame is drawn; built once in `init!`. Override it
+       with (init! canvas {:graph ...}); reorder/add passes by editing data.
+     • the render-IR (globals + instances) — EDN describing WHAT is in the frame; fed to
+       `draw!` each requestAnimationFrame.
+   The heavy rasterization is the GPU's; CLJS only records light per-frame commands. This
+   is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
+   The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform).")
 
 ;; --- column-major mat4 (WebGPU/wgpu convention) ------------------------------
 
@@ -82,11 +85,11 @@
             idx' (into idx (map #(+ base %) [0 1 2 0 2 3]))]
         (recur (rest fs) (+ base 4) v' idx')))))
 
-;; eye (camera world pos) is packed into the spare .w of sun_dir/sun_col/sky so the
-;; uniform stays 112 bytes. Lighting: hemisphere ambient + Lambert sun + Blinn-Phong
-;; specular + a Fresnel rim, Reinhard tonemap + gamma. Material params (metallic/rough)
-;; will move into the EDN render-IR as the next layer (passes/materials as datoms).
-(def ^:private SHADER "
+;; --- shaders (WGSL is data: referenced by the render graph) -------------------
+;; eye (camera world pos) is packed into the spare .w of sun_dir/sun_col/sky. Lighting:
+;; hemisphere ambient + Lambert sun + Blinn-Phong specular + Fresnel rim + shadow-map PCF,
+;; Reinhard tonemap + gamma. PBR material (metallic/roughness/emissive) is per-instance EDN.
+(def SHADER "
 struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32> };
 @group(0) @binding(0) var<uniform> g: G;
 @group(0) @binding(1) var shadowMap: texture_depth_2d;
@@ -115,7 +118,7 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
   let world = model * vec4<f32>(pos, 1.0);
   var o: VO; o.clip = g.vp * world;
   o.n = normalize((model * vec4<f32>(normal, 0.0)).xyz); o.col = color.rgb; o.wpos = world.xyz;
-  o.mat = material.xyz; return o;          // metallic, roughness, emissive (from EDN)
+  o.mat = material.xyz; return o;
 }
 @fragment
 fn fs(i: VO) -> @location(0) vec4<f32> {
@@ -128,27 +131,24 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
   let metallic  = clamp(i.mat.x, 0.0, 1.0);
   let rough     = clamp(i.mat.y, 0.04, 1.0);
   let emissive  = i.mat.z;
-  // hemisphere ambient: sky above, a cool ground bounce below
   let amb = mix(vec3<f32>(0.20,0.22,0.26), g.sky.rgb*0.65, N.y*0.5+0.5);
-  // Blinn-Phong specular: roughness→sharpness, metallic→strength + albedo-tinted
   let shininess = mix(4.0, 256.0, 1.0 - rough);
   let specStr   = mix(0.25, 0.9, metallic);
   let specTint  = mix(vec3<f32>(1.0), i.col, metallic);
   let spec = pow(max(dot(N, H), 0.0), shininess) * specStr;
   let rim  = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.25;
-  let sh = shadow(i.wpos, ndl);            // 1 = lit, 0 = in shadow (PCF)
+  let sh = shadow(i.wpos, ndl);
   var c = i.col * (amb + ndl * g.sun_col.rgb * 0.9 * (1.0 - metallic*0.7) * sh)
         + specTint * g.sun_col.rgb * spec * sh
         + g.sky.rgb * rim
-        + i.col * emissive;               // EDN-authored glow (unshadowed)
-  c = c / (c + vec3<f32>(1.0));                 // Reinhard tonemap
-  c = pow(c, vec3<f32>(1.0/2.2));               // gamma
+        + i.col * emissive;
+  c = c / (c + vec3<f32>(1.0));
+  c = pow(c, vec3<f32>(1.0/2.2));
   return vec4<f32>(c, 1.0);
 }")
 
 ;; depth-only shadow pass: render instances from the sun's POV into the shadow map.
-;; Reuses the same G uniform (reads g.light_vp) + the same vertex/instance buffers.
-(def ^:private SHADOW-WGSL "
+(def SHADOW-WGSL "
 struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32> };
 @group(0) @binding(0) var<uniform> g: G;
 @vertex
@@ -159,97 +159,126 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
   return g.light_vp * model * vec4<f32>(pos, 1.0);
 }")
 
+;; --- the render graph, as EDN data -------------------------------------------
+
+(def default-graph
+  "The frame, described as data. :passes is an ordered array — the shadow pass renders
+   depth into the :shadow target, then the main pass draws to the screen sampling it.
+   Reorder/add passes, swap shaders, or retarget by editing this map (or pass {:graph ...}
+   to init!). Each pipeline's :binds wires its group-0 resources by name."
+  {:shaders   {:lit SHADER :depth SHADOW-WGSL}
+   :targets   {:shadow {:depth "depth32float" :size [2048 2048]}}
+   :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}}
+   :pipelines {:shadow {:shader :depth :cull "back"
+                        :depth {:format "depth32float" :write true :compare "less"}
+                        :binds [:uniform]}
+               :main   {:shader :lit :cull "back" :color :screen
+                        :depth {:format "depth24plus" :write true :compare "less-equal"}
+                        :binds [:uniform {:texture :shadow} {:sampler :comparison}]}}
+   :passes    [{:pipeline :shadow :depth :shadow      :clear-depth 1.0}
+               {:pipeline :main   :color :screen :depth :screen-depth :clear :sky}]})
+
 (def ^:private MAX-INST 16384)
 
 (defn- vattr [fmt off loc] #js {:format fmt :offset off :shaderLocation loc})
+(defn- vlayout []   ;; cube(pos+normal, stride 24) + instance(model+color+material, stride 96)
+  #js [#js {:arrayStride 24 :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)]}
+       #js {:arrayStride 96 :stepMode "instance"
+            :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3) (vattr "float32x4" 32 4)
+                             (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}])
+
+(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color]}]
+  (let [mod (.createShaderModule device #js {:code (get shaders shader)})
+        desc #js {:layout "auto"
+                  :vertex #js {:module mod :entryPoint "vs" :buffers (vlayout)}
+                  :primitive #js {:cullMode (or cull "back")}
+                  :depthStencil #js {:format (:format depth) :depthWriteEnabled (boolean (:write depth)) :depthCompare (:compare depth)}}]
+    (when color   ;; no :color → depth-only pipeline (shadow pass)
+      (set! (.-fragment desc) #js {:module mod :entryPoint "fs"
+                                   :targets #js [#js {:format (if (= color :screen) fmt color)}]}))
+    (.createRenderPipeline device desc)))
+
+(defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
+  [device pipe gbuf targets samplers binds]
+  (.createBindGroup device
+    #js {:layout (.getBindGroupLayout pipe 0)
+         :entries (into-array
+                    (map-indexed
+                      (fn [i b]
+                        (cond
+                          (= b :uniform) #js {:binding i :resource #js {:buffer gbuf}}
+                          (:texture b)   #js {:binding i :resource (get-in targets [(:texture b) :view])}
+                          (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
+                      binds))}))
 
 (defn init!
-  "Set up WebGPU on the canvas once. Returns a Promise of a render context.
-   opts (optional): {:wgsl <shader string>} — the WGSL is data; override it from the
-   EDN render graph (defaults to the built-in PBR shader)."
+  "Set up WebGPU on the canvas once from the render graph. Returns a Promise of a context.
+   opts (optional): {:graph <render-graph EDN>} — defaults to default-graph."
   ([canvas] (init! canvas nil))
   ([canvas opts]
-  (let [gpu (.-gpu js/navigator)]
-    (if-not gpu
-      (js/Promise.reject "WebGPU not available (use a recent Chrome/Edge)")
-      (-> (.requestAdapter gpu)
-          (.then (fn [adapter] (.requestDevice adapter)))
-          (.then
-            (fn [device]
-              (let [w (max 1 (.-clientWidth canvas)) h (max 1 (.-clientHeight canvas))
-                    _ (set! (.-width canvas) w)
-                    _ (set! (.-height canvas) h)
-                    ctx (.getContext canvas "webgpu")
-                    fmt (.getPreferredCanvasFormat gpu)
-                    q (.-queue device)
-                    U js/GPUBufferUsage
-                    [verts idx] (cube)
-                    ;; writeBuffer REQUIRES COPY_DST — without it the write silently
-                    ;; fails (validation error stays in the device scope, not thrown)
-                    ;; and the buffer stays zero-filled → degenerate geometry → nothing
-                    ;; renders. This was the "clear works, no boxes" bug.
-                    mkbuf (fn [data usage]
-                            (let [b (.createBuffer device #js {:size (.-byteLength data)
-                                                               :usage (bit-or usage (.-COPY_DST U))})]
-                              (.writeBuffer q b 0 data) b))
-                    vbuf (mkbuf verts (.-VERTEX U))
-                    ibuf (mkbuf idx (.-INDEX U))
-                    inst (.createBuffer device #js {:size (* MAX-INST 96) :usage (bit-or (.-VERTEX U) (.-COPY_DST U))})
-                    gbuf (.createBuffer device #js {:size 176 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
-                    TU js/GPUTextureUsage
-                    ;; vertex layout shared by the main + shadow pipelines
-                    vlayout #js [#js {:arrayStride 24
-                                      :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)]}
-                                 ;; instance: model(64) + color(16) + material(16) = 96 bytes
-                                 #js {:arrayStride 96 :stepMode "instance"
-                                      :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3)
-                                                       (vattr "float32x4" 32 4) (vattr "float32x4" 48 5)
-                                                       (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}]
-                    shader (.createShaderModule device #js {:code (or (:wgsl opts) SHADER)})
-                    shadow-shader (.createShaderModule device #js {:code SHADOW-WGSL})
-                    pipeline (.createRenderPipeline device
-                               #js {:layout "auto"
-                                    :vertex #js {:module shader :entryPoint "vs" :buffers vlayout}
-                                    :fragment #js {:module shader :entryPoint "fs" :targets #js [#js {:format fmt}]}
-                                    :primitive #js {:cullMode "back"}
-                                    :depthStencil #js {:format "depth24plus" :depthWriteEnabled true :depthCompare "less-equal"}})
-                    ;; shadow pass: depth-only (no fragment), renders into the shadow map
-                    shadow-pipe (.createRenderPipeline device
-                                  #js {:layout "auto"
-                                       :vertex #js {:module shadow-shader :entryPoint "vs" :buffers vlayout}
-                                       :primitive #js {:cullMode "back"}
-                                       :depthStencil #js {:format "depth32float" :depthWriteEnabled true :depthCompare "less"}})
-                    shadow-tex (.createTexture device #js {:size #js [2048 2048] :format "depth32float"
-                                                          :usage (bit-or (.-RENDER_ATTACHMENT TU) (.-TEXTURE_BINDING TU))})
-                    shadow-view (.createView shadow-tex)
-                    shadow-samp (.createSampler device #js {:compare "less-equal" :magFilter "linear" :minFilter "linear"})
-                    bind (.createBindGroup device #js {:layout (.getBindGroupLayout pipeline 0)
-                                                       :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}
-                                                                     #js {:binding 1 :resource shadow-view}
-                                                                     #js {:binding 2 :resource shadow-samp}]})
-                    shadow-bind (.createBindGroup device #js {:layout (.getBindGroupLayout shadow-pipe 0)
-                                                             :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}]})
-                    depth (.createTexture device #js {:size #js [w h] :format "depth24plus" :usage (.-RENDER_ATTACHMENT TU)})]
-                (.configure ctx #js {:device device :format fmt :alphaMode "opaque"})
-                {:device device :queue q :ctx ctx :pipeline pipeline :bind bind
-                 :shadow-pipe shadow-pipe :shadow-bind shadow-bind :shadow-view shadow-view
-                 :vbuf vbuf :ibuf ibuf :inst inst :gbuf gbuf :idx-count (.-length idx)
-                 :depth (.createView depth) :w w :h h }))))))))
+   (let [gpu (.-gpu js/navigator)]
+     (if-not gpu
+       (js/Promise.reject "WebGPU not available (use a recent Chrome/Edge)")
+       (-> (.requestAdapter gpu)
+           (.then (fn [adapter] (.requestDevice adapter)))
+           (.then
+             (fn [device]
+               (let [graph (or (:graph opts) default-graph)
+                     w (max 1 (.-clientWidth canvas)) h (max 1 (.-clientHeight canvas))
+                     _ (set! (.-width canvas) w)
+                     _ (set! (.-height canvas) h)
+                     ctx (.getContext canvas "webgpu")
+                     fmt (.getPreferredCanvasFormat gpu)
+                     q (.-queue device)
+                     U js/GPUBufferUsage
+                     TU js/GPUTextureUsage
+                     [verts idx] (cube)
+                     ;; writeBuffer REQUIRES COPY_DST or it silently no-ops → zero buffers.
+                     mkbuf (fn [data usage]
+                             (let [b (.createBuffer device #js {:size (.-byteLength data)
+                                                                :usage (bit-or usage (.-COPY_DST U))})]
+                               (.writeBuffer q b 0 data) b))
+                     vbuf (mkbuf verts (.-VERTEX U))
+                     ibuf (mkbuf idx (.-INDEX U))
+                     inst (.createBuffer device #js {:size (* MAX-INST 96) :usage (bit-or (.-VERTEX U) (.-COPY_DST U))})
+                     gbuf (.createBuffer device #js {:size 176 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
+                     ;; samplers from EDN
+                     samplers (reduce-kv (fn [m k s] (assoc m k (.createSampler device (clj->js s)))) {} (:samplers graph))
+                     ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
+                     targets (reduce-kv
+                               (fn [m k {:keys [depth color size]}]
+                                 (let [[tw th] (or size [w h])
+                                       f (or depth color)
+                                       tex (.createTexture device #js {:size #js [tw th] :format f
+                                                                       :usage (bit-or (.-RENDER_ATTACHMENT TU) (.-TEXTURE_BINDING TU))})]
+                                   (assoc m k {:tex tex :view (.createView tex) :format f})))
+                               {} (:targets graph))
+                     sdepth (.createTexture device #js {:size #js [w h] :format "depth24plus" :usage (.-RENDER_ATTACHMENT TU)})
+                     targets (assoc targets :screen-depth {:view (.createView sdepth) :format "depth24plus"})
+                     ;; pipelines + bind groups, from EDN
+                     pipelines (reduce-kv
+                                 (fn [m k pd]
+                                   (let [pipe (build-pipeline device fmt (:shaders graph) pd)]
+                                     (assoc m k {:pipe pipe :bind (build-bind device pipe gbuf targets samplers (:binds pd))})))
+                                 {} (:pipelines graph))]
+                 (.configure ctx #js {:device device :format fmt :alphaMode "opaque"})
+                 {:device device :queue q :ctx ctx :fmt fmt :w w :h h
+                  :vbuf vbuf :ibuf ibuf :inst inst :gbuf gbuf :idx-count (.-length idx)
+                  :targets targets :pipelines pipelines :graph graph}))))))))
 
 (defn- arr3 [m k d] (or (get m k) d))
 
 (defn draw!
-  "Draw one frame from a render-IR CLJS map: {:globals {:sky {:horizon :sun-dir :sun}
-   :eye :target} :instances [{:pos :color :size :yaw}]}. Synchronous; no wasm."
-  [{:keys [device queue ctx pipeline bind shadow-pipe shadow-bind shadow-view
-           vbuf ibuf inst gbuf idx-count depth w h]} ir]
+  "Draw one frame from a render-IR map: {:globals {:sky {:horizon :sun-dir :sun} :eye
+   :target} :instances [{:pos :color :size :yaw :metallic :roughness :emissive}]}. Runs
+   the graph's :passes in order. Synchronous; no wasm."
+  [{:keys [device queue ctx w h vbuf ibuf inst gbuf idx-count targets pipelines graph]} ir]
   (let [g (:globals ir)
         sky (:sky g)
         horizon (arr3 sky :horizon [0.7 0.8 0.9])
         sun-dir (arr3 sky :sun-dir [-0.4 -0.85 -0.35])
         sun (arr3 sky :sun [1 0.96 0.85])
         insts (vec (take MAX-INST (:instances ir)))
-        ;; camera: explicit eye/target, else overview of the instance centroid
         cz (reduce (fn [a {:keys [pos]}] [(+ (a 0) (pos 0)) (+ (a 1) (pos 2))]) [0 0] insts)
         n (max 1 (count insts))
         [cxx czz] [(/ (cz 0) n) (/ (cz 1) n)]
@@ -257,26 +286,19 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
         target (arr3 g :target [cxx 0 czz])
         vp (m4-mul (perspective (/ (* 60 js/Math.PI) 180.0) (/ w (max 1 h)) 0.5 4000.0)
                    (look-at (vec eye) (vec target) [0 1 0]))
-        ;; sun light view-proj: orthographic, centred on the camera target, looking
-        ;; down the sun direction — this is the shadow map's camera.
         sl (let [l (js/Math.hypot (sun-dir 0) (sun-dir 1) (sun-dir 2)) l (if (< l 1e-6) 1.0 l)]
              [(/ (sun-dir 0) l) (/ (sun-dir 1) l) (/ (sun-dir 2) l)])
         ltgt [cxx 0 czz]
         leye [(- (ltgt 0) (* (sl 0) 200)) (- (ltgt 1) (* (sl 1) 200)) (- (ltgt 2) (* (sl 2) 200))]
         light-vp (m4-mul (ortho -130 130 -130 130 1.0 420.0) (look-at leye ltgt [0 1 0]))
-        ;; uniform: vp(16) + sun_dir(4) + sun_col(4) + sky(4) + light_vp(16) = 44 floats
-        gf (js/Float32Array. 44)]
+        gf (js/Float32Array. 44)]   ;; vp(16) sun_dir(4) sun_col(4) sky(4) light_vp(16)
     (.set gf vp 0)
-    ;; .w of each carries the camera eye (x,y,z) for view-dependent lighting
     (.set gf (clj->js [(sun-dir 0) (sun-dir 1) (sun-dir 2) (nth eye 0)]) 16)
     (.set gf (clj->js [(sun 0) (sun 1) (sun 2) (nth eye 1)]) 20)
     (.set gf (clj->js [(horizon 0) (horizon 1) (horizon 2) (nth eye 2)]) 24)
     (.set gf light-vp 28)
     (.writeBuffer queue gbuf 0 gf)
-    ;; instance buffer: model(16) + color(4) + material(4) = 24 floats. The material
-    ;; (metallic, roughness, emissive) is EDN data on each instance, defaulting to a
-    ;; matte dielectric — author it per-material in the render graph.
-    (let [idata (js/Float32Array. (* (count insts) 24))]
+    (let [idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
       (dotimes [i (count insts)]
         (let [{:keys [pos color size yaw metallic roughness emissive]} (nth insts i)
               m (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1))
@@ -287,25 +309,25 @@ fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
       (.writeBuffer queue inst 0 idata)
       (let [enc (.createCommandEncoder device)
             ninst (count insts)
+            screen-view (.createView (.getCurrentTexture ctx))
+            vw (fn [k] (if (= k :screen) screen-view (get-in targets [k :view])))
             draw-geom (fn [p pipe bnd]
                         (when (pos? ninst)
-                          (.setPipeline p pipe)
-                          (.setBindGroup p 0 bnd)
-                          (.setVertexBuffer p 0 vbuf)
-                          (.setVertexBuffer p 1 inst)
-                          (.setIndexBuffer p ibuf "uint16")
-                          (.drawIndexed p idx-count ninst)))
-            ;; PASS 1 — shadow map: depth from the sun's POV (no colour)
-            spass (.beginRenderPass enc
-                    #js {:colorAttachments #js []
-                         :depthStencilAttachment #js {:view shadow-view :depthLoadOp "clear" :depthStoreOp "store" :depthClearValue 1.0}})
-            _ (do (draw-geom spass shadow-pipe shadow-bind) (.end spass))
-            ;; PASS 2 — main: lit, sampling the shadow map
-            view (.createView (.getCurrentTexture ctx))
-            pass (.beginRenderPass enc
-                   #js {:colorAttachments #js [#js {:view view :loadOp "clear" :storeOp "store"
-                                                    :clearValue #js {:r (horizon 0) :g (horizon 1) :b (horizon 2) :a 1}}]
-                        :depthStencilAttachment #js {:view depth :depthLoadOp "clear" :depthStoreOp "store" :depthClearValue 1.0}})]
-        (draw-geom pass pipeline bind)
-        (.end pass)
+                          (.setPipeline p pipe) (.setBindGroup p 0 bnd)
+                          (.setVertexBuffer p 0 vbuf) (.setVertexBuffer p 1 inst)
+                          (.setIndexBuffer p ibuf "uint16") (.drawIndexed p idx-count ninst)))]
+        ;; run the graph's passes in order (EDN-driven)
+        (doseq [{:keys [pipeline color depth clear clear-depth]} (:passes graph)]
+          (let [{:keys [pipe bind]} (get pipelines pipeline)
+                catts (if color
+                        (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
+                          #js [#js {:view (vw color) :loadOp "clear" :storeOp "store"
+                                    :clearValue #js {:r (c 0) :g (c 1) :b (c 2) :a 1}}])
+                        #js [])
+                rp (.beginRenderPass enc
+                     #js {:colorAttachments catts
+                          :depthStencilAttachment #js {:view (vw depth) :depthLoadOp "clear"
+                                                       :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}})]
+            (draw-geom rp pipe bind)
+            (.end rp)))
         (.submit queue #js [(.finish enc)])))))
