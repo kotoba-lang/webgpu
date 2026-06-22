@@ -83,15 +83,16 @@
 (def ^:private SHADER "
 struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32> };
 @group(0) @binding(0) var<uniform> g: G;
-struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32>, @location(1) col: vec3<f32>, @location(2) wpos: vec3<f32> };
+struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32>, @location(1) col: vec3<f32>, @location(2) wpos: vec3<f32>, @location(3) mat: vec3<f32> };
 @vertex
 fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
       @location(2) m0: vec4<f32>, @location(3) m1: vec4<f32>, @location(4) m2: vec4<f32>, @location(5) m3: vec4<f32>,
-      @location(6) color: vec4<f32>) -> VO {
+      @location(6) color: vec4<f32>, @location(7) material: vec4<f32>) -> VO {
   let model = mat4x4<f32>(m0, m1, m2, m3);
   let world = model * vec4<f32>(pos, 1.0);
   var o: VO; o.clip = g.vp * world;
-  o.n = normalize((model * vec4<f32>(normal, 0.0)).xyz); o.col = color.rgb; o.wpos = world.xyz; return o;
+  o.n = normalize((model * vec4<f32>(normal, 0.0)).xyz); o.col = color.rgb; o.wpos = world.xyz;
+  o.mat = material.xyz; return o;          // metallic, roughness, emissive (from EDN)
 }
 @fragment
 fn fs(i: VO) -> @location(0) vec4<f32> {
@@ -101,12 +102,21 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
   let V = normalize(eye - i.wpos);
   let H = normalize(L + V);
   let ndl = max(dot(N, L), 0.0);
+  let metallic  = clamp(i.mat.x, 0.0, 1.0);
+  let rough     = clamp(i.mat.y, 0.04, 1.0);
+  let emissive  = i.mat.z;
   // hemisphere ambient: sky above, a cool ground bounce below
   let amb = mix(vec3<f32>(0.20,0.22,0.26), g.sky.rgb*0.65, N.y*0.5+0.5);
-  // Blinn-Phong specular (sun only) + soft Fresnel rim toward the sky
-  let spec = pow(max(dot(N, H), 0.0), 48.0) * 0.35;
+  // Blinn-Phong specular: roughness→sharpness, metallic→strength + albedo-tinted
+  let shininess = mix(4.0, 256.0, 1.0 - rough);
+  let specStr   = mix(0.25, 0.9, metallic);
+  let specTint  = mix(vec3<f32>(1.0), i.col, metallic);
+  let spec = pow(max(dot(N, H), 0.0), shininess) * specStr;
   let rim  = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.25;
-  var c = i.col * (amb + ndl * g.sun_col.rgb * 0.9) + g.sun_col.rgb * spec + g.sky.rgb * rim;
+  var c = i.col * (amb + ndl * g.sun_col.rgb * 0.9 * (1.0 - metallic*0.7))
+        + specTint * g.sun_col.rgb * spec
+        + g.sky.rgb * rim
+        + i.col * emissive;               // EDN-authored glow
   c = c / (c + vec3<f32>(1.0));                 // Reinhard tonemap
   c = pow(c, vec3<f32>(1.0/2.2));               // gamma
   return vec4<f32>(c, 1.0);
@@ -117,8 +127,11 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
 (defn- vattr [fmt off loc] #js {:format fmt :offset off :shaderLocation loc})
 
 (defn init!
-  "Set up WebGPU on the canvas once. Returns a Promise of a render context."
-  [canvas]
+  "Set up WebGPU on the canvas once. Returns a Promise of a render context.
+   opts (optional): {:wgsl <shader string>} — the WGSL is data; override it from the
+   EDN render graph (defaults to the built-in PBR shader)."
+  ([canvas] (init! canvas nil))
+  ([canvas opts]
   (let [gpu (.-gpu js/navigator)]
     (if-not gpu
       (js/Promise.reject "WebGPU not available (use a recent Chrome/Edge)")
@@ -144,18 +157,19 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
                               (.writeBuffer q b 0 data) b))
                     vbuf (mkbuf verts (.-VERTEX U))
                     ibuf (mkbuf idx (.-INDEX U))
-                    inst (.createBuffer device #js {:size (* MAX-INST 80) :usage (bit-or (.-VERTEX U) (.-COPY_DST U))})
+                    inst (.createBuffer device #js {:size (* MAX-INST 96) :usage (bit-or (.-VERTEX U) (.-COPY_DST U))})
                     gbuf (.createBuffer device #js {:size 112 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
-                    shader (.createShaderModule device #js {:code SHADER})
+                    shader (.createShaderModule device #js {:code (or (:wgsl opts) SHADER)})
                     pipeline (.createRenderPipeline device
                                #js {:layout "auto"
                                     :vertex #js {:module shader :entryPoint "vs"
                                                  :buffers #js [#js {:arrayStride 24
                                                                     :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)]}
-                                                               #js {:arrayStride 80 :stepMode "instance"
+                                                               ;; instance: model(64) + color(16) + material(16) = 96 bytes
+                                                               #js {:arrayStride 96 :stepMode "instance"
                                                                     :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3)
                                                                                      (vattr "float32x4" 32 4) (vattr "float32x4" 48 5)
-                                                                                     (vattr "float32x4" 64 6)]}]}
+                                                                                     (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}]}
                                     :fragment #js {:module shader :entryPoint "fs" :targets #js [#js {:format fmt}]}
                                     :primitive #js {:cullMode "back"}
                                     :depthStencil #js {:format "depth24plus" :depthWriteEnabled true :depthCompare "less-equal"}})
@@ -165,7 +179,7 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
                 (.configure ctx #js {:device device :format fmt :alphaMode "opaque"})
                 {:device device :queue q :ctx ctx :pipeline pipeline :bind bind
                  :vbuf vbuf :ibuf ibuf :inst inst :gbuf gbuf :idx-count (.-length idx)
-                 :depth (.createView depth) :w w :h h})))))))
+                 :depth (.createView depth) :w w :h h }))))))))
 
 (defn- arr3 [m k d] (or (get m k) d))
 
@@ -195,14 +209,17 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
     (.set gf (clj->js [(sun 0) (sun 1) (sun 2) (nth eye 1)]) 20)
     (.set gf (clj->js [(horizon 0) (horizon 1) (horizon 2) (nth eye 2)]) 24)
     (.writeBuffer queue gbuf 0 gf)
-    ;; instance buffer: per instance model(16) + color(4) = 20 floats
-    (let [idata (js/Float32Array. (* (count insts) 20))]
+    ;; instance buffer: model(16) + color(4) + material(4) = 24 floats. The material
+    ;; (metallic, roughness, emissive) is EDN data on each instance, defaulting to a
+    ;; matte dielectric — author it per-material in the render graph.
+    (let [idata (js/Float32Array. (* (count insts) 24))]
       (dotimes [i (count insts)]
-        (let [{:keys [pos color size yaw]} (nth insts i)
+        (let [{:keys [pos color size yaw metallic roughness emissive]} (nth insts i)
               m (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1))
-              base (* i 20)]
+              base (* i 24)]
           (.set idata m base)
-          (.set idata (clj->js [(color 0) (color 1) (color 2) 1]) (+ base 16))))
+          (.set idata (clj->js [(color 0) (color 1) (color 2) 1]) (+ base 16))
+          (.set idata (clj->js [(or metallic 0.0) (or roughness 0.65) (or emissive 0.0) 0]) (+ base 20))))
       (.writeBuffer queue inst 0 idata)
       (let [enc (.createCommandEncoder device)
             view (.createView (.getCurrentTexture ctx))

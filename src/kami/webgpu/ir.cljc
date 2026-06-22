@@ -16,17 +16,32 @@
       :instances [{:pos   [x y z]                 ;; world position (ground at y)
                    :color [r g b]                 ;; albedo
                    :size  [w h]                   ;; footprint w (x,z) × height h
-                   :yaw   theta}]}                 ;; rotation about Y (radians)
+                   :yaw   theta                    ;; rotation about Y (radians)
+                   :metallic m :roughness r :emissive e}]} ;; PBR material (optional)
+
+   A material is just the PBR fields — author a palette as data and merge it into
+   instances (or store it as Datomic datoms and query/as-of/fork it):
+
+      {:metallic 0.0 :roughness 0.65 :emissive 0.0}
 
    Everything is data: build it with assoc/update/merge, store it in Datomic, send
    it over the wire, fork it. Future keys (:passes, :pipelines, :materials, WGSL as
    EDN) extend the same map without changing the contract — the executor reads what
    it understands and ignores the rest.")
 
+(defn material
+  "A PBR material — pure data. metallic 0=dielectric…1=metal; roughness 0=mirror…1=matte;
+   emissive ≥0 = self-glow (× albedo). Store these as datoms and query/as-of/fork them."
+  [& {:keys [metallic roughness emissive] :or {metallic 0.0 roughness 0.65 emissive 0.0}}]
+  {:metallic metallic :roughness roughness :emissive emissive})
+
 (defn instance
-  "An instanced cuboid. Pure data."
-  [pos color size & {:keys [yaw] :or {yaw 0}}]
-  {:pos pos :color color :size size :yaw yaw})
+  "An instanced cuboid. Pure data. Merge a `material` map in for PBR."
+  [pos color size & {:keys [yaw metallic roughness emissive] :or {yaw 0}}]
+  (cond-> {:pos pos :color color :size size :yaw yaw}
+    metallic  (assoc :metallic metallic)
+    roughness (assoc :roughness roughness)
+    emissive  (assoc :emissive emissive)))
 
 (defn sky
   [horizon sun-dir sun]
