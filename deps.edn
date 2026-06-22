@@ -1,0 +1,7 @@
+;; kami-webgpu — declarative WebGPU from EDN (hiccup for the GPU).
+;; A .cljc-first library: the render-IR is pure EDN data (portable across
+;; Clojure / ClojureScript / Rust / Datomic); the executor that turns it into
+;; WebGPU calls is ClojureScript (browser-only). Consumers add this via
+;; :local/root or a git dep and put `kami.webgpu` on their shadow-cljs source path.
+{:paths ["src"]
+ :deps  {}}
