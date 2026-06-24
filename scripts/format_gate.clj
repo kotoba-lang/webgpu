@@ -8,7 +8,8 @@
          '[kami.scad :as scad]
          '[kami.spirv :as spirv]
          '[kami.kicad :as kicad]
-         '[kami.spice :as spice])
+         '[kami.spice :as spice]
+         '[kami.usd :as usd])
 
 (defn- have? [tool] (some? (fs/which tool)))
 
@@ -47,6 +48,19 @@
                               [:OpStore :color :white] [:OpReturn] [:OpFunctionEnd]]))
            (shell "spirv-as" (path "shader.spvasm") "-o" (path "shader.spv"))
            (when (have? "spirv-val") (shell "spirv-val" (path "shader.spv")))   ;; validate if available
+           true)}
+
+   {:name "usd → usdcat" :tool "usdcat" :hint "pip install usd-core"
+    :run (fn []
+           (spit (path "scene.usda")
+                 (usd/usda {:defaultPrim "hello" :upAxis :Y}
+                           [:def "Xform" :hello {:kind "component"}
+                            [:attr "float3" "xformOp:translate" [0 1 0]]
+                            [:attr "uniform token[]" :xformOpOrder [:array :xformOp:translate]]
+                            [:def "Sphere" :world
+                             [:attr "double" :radius 2]
+                             [:attr "color3f[]" "primvars:displayColor" [[1 0 0]]]]]))
+           (shell {:out :string :err :string} "usdcat" (path "scene.usda"))   ;; full parse + round-trip
            true)}
 
    {:name "spice → ngspice" :tool "ngspice" :hint "brew install ngspice"

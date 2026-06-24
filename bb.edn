@@ -17,6 +17,7 @@
                      (load-file "test/kicad_test.clj")
                      (load-file "test/dxf_test.clj")
                      (load-file "test/spice_test.clj")
+                     (load-file "test/usd_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj"))}
 
