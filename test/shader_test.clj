@@ -45,6 +45,44 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
   (is (= (canon golden-fs) (canon (sh/lit-fs)))
       "kami.wgsl-generated fragment is token-equivalent to the hand-written, on-screen-verified WGSL"))
 
+;; the rest of the shipped shader: uniforms, shadow-map bindings, PCF shadow fn, varyings, vertex.
+(def golden-preamble
+  "struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp: mat4x4<f32>,
+           light_a: vec4<f32>, light_b: vec4<f32>, light_c: vec4<f32>, light_d: vec4<f32> };
+@group(0) @binding(0) var<uniform> g: G;
+@group(0) @binding(1) var shadowMap: texture_depth_2d;
+@group(0) @binding(2) var shadowSamp: sampler_comparison;
+fn shadow(wpos: vec3<f32>, ndl: f32) -> f32 {
+  let lc = g.light_vp * vec4<f32>(wpos, 1.0);
+  let ndc = lc.xyz / lc.w;
+  let uv = vec2<f32>(ndc.x*0.5+0.5, 0.5-ndc.y*0.5);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) { return 1.0; }
+  let bias = max(g.light_d.y*(1.0-ndl), g.light_d.z);
+  let texel = g.light_d.w;
+  var lit = 0.0;
+  for (var dx = -1; dx <= 1; dx++) {
+    for (var dy = -1; dy <= 1; dy++) {
+      lit += textureSampleCompareLevel(shadowMap, shadowSamp, uv + vec2<f32>(f32(dx),f32(dy))*texel, ndc.z - bias);
+    }
+  }
+  return lit/9.0;
+}
+struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32>, @location(1) col: vec3<f32>, @location(2) wpos: vec3<f32>, @location(3) mat: vec3<f32> };
+@vertex
+fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>,
+      @location(2) m0: vec4<f32>, @location(3) m1: vec4<f32>, @location(4) m2: vec4<f32>, @location(5) m3: vec4<f32>,
+      @location(6) color: vec4<f32>, @location(7) material: vec4<f32>) -> VO {
+  let model = mat4x4<f32>(m0, m1, m2, m3);
+  let world = model * vec4<f32>(pos, 1.0);
+  var o: VO; o.clip = g.vp * world;
+  o.n = normalize((model * vec4<f32>(normal, 0.0)).xyz); o.col = color.rgb; o.wpos = world.xyz;
+  o.mat = material.xyz; return o;
+}")
+
+(deftest lit-shader-matches-the-shipped-shader
+  (is (= (canon (str golden-preamble "\n" golden-fs)) (canon (sh/lit-shader)))
+      "the whole kami.wgsl-generated shader (struct/bindings/shadow/vertex/fragment) is token-equivalent to the shipped WGSL"))
+
 (let [{:keys [fail error]} (run-tests 'shader-test)]
   (when (pos? (+ fail error))
     (throw (ex-info "shader gate failed" {:fail fail :error error}))))
