@@ -16,6 +16,7 @@
          '[kami.ocio :as ocio]
          '[kami.dot :as dot]
          '[kami.proto :as proto]
+         '[kami.graphql :as gql]
          '[kami.json :as kjson]
          '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
@@ -114,6 +115,18 @@
                              :nodes [(gltf/node {:name "root" :translation [0 1 0]})]
                              :materials [(gltf/material "red" [1 0 0 1])]}))
            (shell {:out :string :err :string} "node" "scripts/gltf_validate.js" (path "scene.gltf"))
+           true)}
+
+   {:name "graphql → buildSchema" :tool "node" :hint "node (+ npm i -g graphql for full parse)"
+    :run (fn []
+           (spit (path "schema.graphql")
+                 (gql/graphql
+                   [:type :Query [:field :me :User] [:field :users [:list! :User!]]]
+                   [:type :User {:implements [:Node]}
+                    [:field :id :ID!] [:field :name :String!] [:field :role :Role]]
+                   [:interface :Node [:field :id :ID!]]
+                   [:enum :Role :ADMIN :USER]))
+           (shell {:out :string :err :string} "node" "scripts/graphql_validate.js" (path "schema.graphql"))
            true)}
 
    {:name "proto → protoc" :tool "protoc" :hint "brew install protobuf"
