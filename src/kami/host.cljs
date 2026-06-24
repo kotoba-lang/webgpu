@@ -184,3 +184,18 @@
   "Current entities as [{:id :tag :pos [x y z]} …]."
   [st]
   (mapv (fn [[id e]] {:id id :tag (:tag e) :pos [(:x e) (:y e) (:z e)]}) (:ents @st)))
+
+(defn globals
+  "Read the game's exported `defatom` cells (mutable WASM globals) as a {name → number} map —
+   the host's window into lives/score/etc. without off-map marker entities. Empty if the game
+   declares none (or on any read error — the HUD then falls back to marker counts)."
+  [{:keys [exports]}]
+  (let [out (atom {})]
+    (try
+      (when exports
+        (doseq [k (array-seq (js/Object.keys exports))]
+          (let [e (aget exports k)]
+            (when (instance? js/WebAssembly.Global e)
+              (swap! out assoc k (js/Number (.-value e)))))))
+      (catch :default _ nil))
+    @out))
