@@ -28,7 +28,8 @@
   (gate "scene_particle.wgsl"  (rs/scene-particle))
   (gate "scene_terrain.wgsl"   (rs/scene-terrain))
   (gate "scene_water.wgsl"     (rs/scene-water))
-  (gate "scene_sky.wgsl"       (rs/scene-sky)))
+  (gate "scene_sky.wgsl"       (rs/scene-sky))
+  (gate "rt_bvh_compute.wgsl"  (rs/rt-bvh-compute)))
 
 (let [{:keys [fail error]} (run-tests 'render-shader-test)]
   (when (pos? (+ fail error))

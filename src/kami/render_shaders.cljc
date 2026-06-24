@@ -195,3 +195,78 @@
                [:let :fade [:smoothstep 5500.0 400.0 :t]]
                [:set :sky [:mix :sky :ccol [:* :mask :fade]]]]]]]
            [:return [:vec4f :sky 1.0]])))
+
+;; ── rt_bvh_compute — BVH ray-tracer (compute + storage + explicit-stack traversal) ───────────────
+;; Phase 3 proof: structured WGSL via the DSL; the procedural traversal loop via raw-string passthrough.
+(defn rt-bvh-compute []
+  (w/shader
+   (w/struct* :BvhNode [[:min [:vec3 :f32]] [:left :u32] [:max [:vec3 :f32]] [:right :u32]
+                        [:start :u32] [:count :u32] [:pad0 :u32] [:pad1 :u32]])
+   (w/struct* :Tri [[:v0 [:vec3 :f32]] [:id :u32] [:v1 [:vec3 :f32]] [:p1 :u32] [:v2 [:vec3 :f32]] [:p2 :u32]])
+   (w/struct* :RtGlobals [[:inv-view-proj [:mat4 :f32]] [:cam-pos [:vec4 :f32]] [:dims [:vec4 :u32]]])
+   (w/binding* {:group 0 :binding 0 :space :storage :access :read} :nodes "array<BvhNode>")
+   (w/binding* {:group 0 :binding 1 :space :storage :access :read} :tris "array<Tri>")
+   (w/binding* {:group 0 :binding 2 :space :uniform} :globals :RtGlobals)
+   (w/binding* {:group 0 :binding 3 :space :storage :access :read_write} :out-hits "array<vec4<f32>>")
+   (w/struct* :Hit [[:t :f32] [:id :f32] [:u :f32] [:v :f32]])
+   (w/func :intersect-tri {:params [[:origin [:vec3 :f32]] [:dir [:vec3 :f32]] [:tri :Tri]] :ret [:vec4 :f32]}
+           [:let :e1 [:- :tri.v1 :tri.v0]] [:let :e2 [:- :tri.v2 :tri.v0]]
+           [:let :p [:cross :dir :e2]] [:let :det [:dot :e1 :p]]
+           [:if [:< [:abs :det] "1e-8"] [[:return [:vec4 0.0 0.0 0.0 0.0]]]]
+           [:let :inv [:/ 1.0 :det]] [:let :tv [:- :origin :tri.v0]]
+           [:let :u [:* [:dot :tv :p] :inv]]
+           [:if [:|| [:< :u 0.0] [:> :u 1.0]] [[:return [:vec4 0.0 0.0 0.0 0.0]]]]
+           [:let :q [:cross :tv :e1]] [:let :v [:* [:dot :dir :q] :inv]]
+           [:if [:|| [:< :v 0.0] [:> [:+ :u :v] 1.0]] [[:return [:vec4 0.0 0.0 0.0 0.0]]]]
+           [:let :t [:* [:dot :e2 :q] :inv]]
+           [:if [:<= :t "1e-4"] [[:return [:vec4 0.0 0.0 0.0 0.0]]]]
+           [:return [:vec4 :t :u :v 1.0]])
+   (w/func :slab-hit {:params [[:origin [:vec3 :f32]] [:inv-dir [:vec3 :f32]] [:lo [:vec3 :f32]] [:hi [:vec3 :f32]] [:tmax :f32]] :ret :bool}
+           [:let :t0 [:* [:- :lo :origin] :inv-dir]] [:let :t1 [:* [:- :hi :origin] :inv-dir]]
+           [:let :tsmall [:min :t0 :t1]] [:let :tbig [:max :t0 :t1]]
+           [:let :tmin [:max [:max :tsmall.x :tsmall.y] :tsmall.z]]
+           [:let :tcap [:min [:min :tbig.x :tbig.y] [:min :tbig.z :tmax]]]
+           [:return [:>= :tcap [:max :tmin 0.0]]])
+   (w/func :primary-ray {:params [[:px :u32] [:py :u32]] :ret "array<vec3<f32>, 2>"}
+           [:let :w [:f32 :globals.dims.x]] [:let :h [:f32 :globals.dims.y]]
+           [:let :ndc [:- [:* [:/ [:vec2 [:+ [:f32 :px] 0.5] [:+ [:f32 :py] 0.5]] [:vec2 :w :h]] 2.0] 1.0]]
+           [:let :far [:* :globals.inv-view-proj [:vec4 :ndc.x [:- :ndc.y] 1.0 1.0]]]
+           [:let :world [:/ :far.xyz :far.w]] [:let :origin :globals.cam-pos.xyz]
+           [:let :dir [:normalize [:- :world :origin]]]
+           [:return "array<vec3<f32>, 2>(origin, dir)"])
+   (w/func :trace {:stage :compute :workgroup-size [8 8 1]
+                   :params [[:gid [:vec3 :u32] {:builtin :global-invocation-id}]]}
+           [:if [:|| [:>= :gid.x :globals.dims.x] [:>= :gid.y :globals.dims.y]] [[:return]]]
+           [:let :idx [:+ [:* :gid.y :globals.dims.x] :gid.x]]
+           [:let :ray [:primary-ray :gid.x :gid.y]]
+           [:let :origin "ray[0]"] [:let :dir "ray[1]"]
+           [:let :inv-dir [:/ [:vec3 1.0] :dir]]
+           [:var :best [:vec4 [:- 1.0] 0.0 0.0 0.0]] [:var :best-t "1e30"]
+           "var stack: array<u32, 64>"
+           [:var :sp [:i 0]]
+           "stack[sp] = 0u"
+           [:set :sp [:+ :sp [:i 1]]]
+           (str "loop {\n"
+                "  if (sp == 0) { break; }\n"
+                "  sp = sp - 1;\n"
+                "  let ni = stack[sp];\n"
+                "  let node = nodes[ni];\n"
+                "  if (!slab_hit(origin, inv_dir, node.min, node.max, best_t)) { continue; }\n"
+                "  if (node.count > 0u) {\n"
+                "    var k = node.start;\n"
+                "    let end = node.start + node.count;\n"
+                "    loop {\n"
+                "      if (k >= end) { break; }\n"
+                "      let r = intersect_tri(origin, dir, tris[k]);\n"
+                "      if (r.w > 0.5 && r.x < best_t) {\n"
+                "        best_t = r.x;\n"
+                "        best = vec4<f32>(r.x, f32(tris[k].id), r.y, r.z);\n"
+                "      }\n"
+                "      k = k + 1u;\n"
+                "    }\n"
+                "  } else {\n"
+                "    if (sp < 63) { stack[sp] = node.left;  sp = sp + 1; }\n"
+                "    if (sp < 63) { stack[sp] = node.right; sp = sp + 1; }\n"
+                "  }\n"
+                "}\n"
+                "out_hits[idx] = best"))))
