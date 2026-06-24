@@ -16,6 +16,7 @@
          '[kami.materialx :as mtlx]
          '[kami.graphml :as graphml]
          '[kami.mathml :as mathml]
+         '[kami.musicxml :as musicxml]
          '[kami.ocio :as ocio]
          '[kami.dot :as dot]
          '[kami.proto :as proto]
@@ -233,6 +234,17 @@
                                     ".card:hover" {:opacity 0.8 :transform "scale(1.02)"}}
                             :keyframes {:fade [[0 {:opacity 0}] [100 {:opacity 1}]]}}))
            (shell {:out :string :err :string} "esbuild" (path "style.css") "--minify")   ;; real CSS parse
+           true)}
+
+   {:name "musicxml → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
+    :run (fn []
+           (spit (path "s.musicxml")
+                 (musicxml/score-partwise {:part-name "Tune"}
+                                          (musicxml/measure 1
+                                            (musicxml/attributes {:divisions 1 :beats 4 :beat-type 4 :clef [:G 2]})
+                                            (musicxml/note :C 4 1 :quarter)
+                                            (musicxml/rest* 2 :half))))
+           (shell {:out :string :err :string} "xmllint" "--noout" (path "s.musicxml"))   ;; well-formedness
            true)}
 
    {:name "mathml → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
