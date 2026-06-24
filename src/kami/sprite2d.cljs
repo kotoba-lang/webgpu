@@ -18,9 +18,9 @@
                     (js/Math.round (* 255 (nth c 1))) ","
                     (js/Math.round (* 255 (nth c 2))) "," (nth c 3 1) ")"))
 
-(defn prim!
-  "Draw one EDN primitive onto a 2D context (already translated/scaled to the sprite origin)."
-  [ctx [kind o]]
+(defn- draw-shape!
+  "Draw one EDN primitive at its :dx/:dy within the sprite (no animation)."
+  [ctx kind o]
   (case kind
     :circle  (do (set! (.-fillStyle ctx) (css (:fill o)))
                  (.beginPath ctx) (.arc ctx (:dx o 0) (:dy o 0) (:r o 10) 0 (* 2 js/Math.PI)) (.fill ctx))
@@ -33,17 +33,41 @@
                  (.beginPath ctx) (.arc ctx (:dx o 0) (:dy o 0) (:r o 10) (:a0 o 0) (:a1 o js/Math.PI)) (.stroke ctx))
     nil))
 
+(defn prim!
+  "Draw one EDN primitive, applying its optional `:anim` — a data-declared, tick-driven motion
+   around a pivot (default the part's :dx/:dy):
+     {:rot [amp freq] :pulse [amp freq] :bob [amp freq] :sway [amp freq] :pivot [px py]}
+   so a sprite can say its arms heave or its legs swing as DATA, no renderer code. `ph` is a
+   per-entity phase so identical sprites don't move in lockstep."
+  [ctx [kind o] tick ph]
+  (if-let [an (:anim o)]
+    (let [px (nth (:pivot an) 0 (:dx o 0))
+          py (nth (:pivot an) 1 (:dy o 0))
+          w  (fn [[a f]] (* a (js/Math.sin (+ (* tick f) ph))))]
+      (.save ctx)
+      (.translate ctx px py)
+      (when (:rot an)   (.rotate ctx (w (:rot an))))
+      (when (:pulse an) (let [s (+ 1 (w (:pulse an)))] (.scale ctx s s)))
+      (when (:bob an)   (.translate ctx 0 (w (:bob an))))
+      (when (:sway an)  (.translate ctx (w (:sway an)) 0))
+      (.translate ctx (- px) (- py))
+      (draw-shape! ctx kind o)
+      (.restore ctx))
+    (draw-shape! ctx kind o)))
+
 (defn draw-sprite!
-  "Draw a sprite (vector of prims) centred at screen (sx,sy), scaled by k (with a soft shadow)."
-  [ctx sprite sx sy k]
-  (.save ctx)
-  (.translate ctx sx sy)
-  ;; ground shadow
-  (set! (.-fillStyle ctx) "rgba(0,0,0,.22)")
-  (.beginPath ctx) (.ellipse ctx 0 (* 260 k) (* 230 k) (* 70 k) 0 0 (* 2 js/Math.PI)) (.fill ctx)
-  (.scale ctx k k)
-  (doseq [p sprite] (prim! ctx p))
-  (.restore ctx))
+  "Draw a sprite (vector of prims) centred at screen (sx,sy), scaled by k (with a soft shadow).
+   `tick` drives any per-part `:anim`; `ph` desyncs identical sprites. The 5-arg form is static."
+  ([ctx sprite sx sy k] (draw-sprite! ctx sprite sx sy k 0 0))
+  ([ctx sprite sx sy k tick ph]
+   (.save ctx)
+   (.translate ctx sx sy)
+   ;; ground shadow
+   (set! (.-fillStyle ctx) "rgba(0,0,0,.22)")
+   (.beginPath ctx) (.ellipse ctx 0 (* 260 k) (* 230 k) (* 70 k) 0 0 (* 2 js/Math.PI)) (.fill ctx)
+   (.scale ctx k k)
+   (doseq [p sprite] (prim! ctx p tick ph))
+   (.restore ctx)))
 
 ;; deterministic tree scatter (top-down): a fixed pseudo-random field, memoised once.
 (defonce ^:private trees* (atom nil))
@@ -105,7 +129,8 @@
               ph  (* 0.013 (+ (:sx op) (:sy op)))
               br  (+ 1.0 (* amp (js/Math.sin (+ (* t 0.11) ph))))
               bob (* (if (= tag "gorilla") 5 3) (js/Math.sin (+ (* t 0.09) ph)))]
-          (draw-sprite! ctx (:sprite op) (:sx op) (+ (:sy op) bob) (* k br)))))
+          ;; whole-sprite breathing/bob (default liveliness) + per-part :anim (declared in EDN)
+          (draw-sprite! ctx (:sprite op) (:sx op) (+ (:sy op) bob) (* k br) t ph))))
     (.restore ctx)
     ;; juice layer (screen-space, centred on the player): floating "+N" text + collect particles
     (when (seq fx)
