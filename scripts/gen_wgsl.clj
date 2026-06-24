@@ -1,46 +1,54 @@
-;; gen_wgsl.clj — single-source the lit + shadow shaders across web + native.
+;; gen_wgsl.clj — single-source every shader across web + native from kami.wgsl EDN.
 ;;
-;; kami.shaders/{lit-shader,shadow-shader} (EDN AST → kami.wgsl) are the ONE source. `--write` emits
-;; the canonical WGSL to fixtures/*.wgsl (committed beside the geometry goldens) AND, when the native
-;; crate is co-located, to kami-engine/kami-webgpu-rs/src/*.wgsl (which native `include_str!`s). The
-;; parity check confirms the native files match kami.shaders — so the web (kami.webgpu) and native
-;; (kami-webgpu-rs) renderers can't silently diverge.
+;; kami.shaders/{lit-shader,shadow-shader} feed the isekai lit renderer (web kami.webgpu +
+;; native kami-webgpu-rs). kami.render-shaders/* feed the native open-world renderer (kami-render,
+;; 16 shaders). `--write` emits the canonical WGSL to fixtures/ AND, when the native crates are
+;; co-located, to their src/shaders dirs (which native `include_str!`s). The parity check confirms
+;; the native files match the EDN — so web/native renderers can't silently diverge.
 ;;
-;;   bb gen-wgsl          # write the .wgsl files + report native parity
+;;   bb gen-wgsl          # write the .wgsl files + report parity
 ;;   bb wgsl-parity       # report parity only          --strict → throw on drift
 (require '[kami.shaders :as sh]
+         '[kami.render-shaders :as rs]
          '[clojure.string :as str]
          '[clojure.java.io :as io])
 
-(def native-root "../kami-engine")
-(def shaders [{:name "lit"    :wgsl (str (sh/lit-shader) "\n")
-               :fixture "fixtures/lit-shader.wgsl"    :native "../kami-engine/kami-webgpu-rs/src/lit_shader.wgsl"}
-              {:name "shadow" :wgsl (str (sh/shadow-shader) "\n")
-               :fixture "fixtures/shadow-shader.wgsl" :native "../kami-engine/kami-webgpu-rs/src/shadow_shader.wgsl"}])
+(def lit-native    "../kami-engine/kami-webgpu-rs/src")          ;; isekai lit renderer (native)
+(def render-native "../kami-engine/kami-render/src/shaders")     ;; open-world renderer (native)
 
-(defn- canon [s] (str/replace s #"[\s()]" ""))     ;; token stream (ws + grouping/call parens stripped)
-(def co-located? (.exists (io/file native-root)))
+(def lit-shaders [{:wgsl (str (sh/lit-shader) "\n")    :fixture "fixtures/lit-shader.wgsl"    :native (str lit-native "/lit_shader.wgsl")}
+                  {:wgsl (str (sh/shadow-shader) "\n") :fixture "fixtures/shadow-shader.wgsl" :native (str lit-native "/shadow_shader.wgsl")}])
+
+;; the 16 kami-render shaders: EDN fn → its committed native .wgsl (native already include_str!s these).
+(def render-shaders
+  (for [[file f] [["scene_character" rs/scene-character] ["scene_voxel" rs/scene-voxel] ["scene_particle" rs/scene-particle]
+                  ["scene_terrain" rs/scene-terrain] ["scene_water" rs/scene-water] ["scene_sky" rs/scene-sky]
+                  ["scene_atlas" rs/scene-atlas] ["scene_vegetation" rs/scene-vegetation] ["rt_bvh_compute" rs/rt-bvh-compute]
+                  ["mtoon" rs/mtoon] ["metahuman_hair" rs/metahuman-hair] ["gaussian_splat" rs/gaussian-splat]
+                  ["strand_compute" rs/strand-compute] ["skinned_mtoon" rs/skinned-mtoon] ["metahuman_skin" rs/metahuman-skin] ["pbr" rs/pbr]]]
+    {:wgsl (str (f) "\n") :native (str render-native "/" file ".wgsl") :name file}))
+
+(defn- canon [s]
+  (-> s (str/replace #"//[^\n]*" "") (str/replace #"\s" "")
+      (str/replace #",(?=[}\)])" "") (str/replace #"};" "}") (str/replace #"[()]" "")))
+
+(def all (concat (map #(assoc % :name (or (:name %) (re-find #"[^/]+(?=\.wgsl$)" (:native %)))) lit-shaders)
+                 render-shaders))
 
 (when (some #{"--write"} *command-line-args*)
-  (doseq [{:keys [wgsl fixture native]} shaders]
-    (io/make-parents (io/file fixture))
-    (spit fixture wgsl)
-    (println (format "wrote %s — %d bytes" fixture (count wgsl)))
-    (when co-located?
-      (spit native wgsl)
-      (println (format "wrote %s" native)))))
+  (doseq [{:keys [wgsl fixture native]} all]
+    (when fixture (io/make-parents (io/file fixture)) (spit fixture wgsl))
+    (when (.exists (io/file (.getParent (io/file native)))) (spit native wgsl)))
+  (println (format "wrote %d shaders (web fixtures + native src where co-located)" (count all))))
 
-(println "── lit + shadow shaders — web (kami.shaders) ↔ native (kami-webgpu-rs) single source ──")
-(if-not co-located?
-  (println "  ⊘ kami-engine not co-located — skip native parity (web canonical written)")
-  (let [results (for [{:keys [name wgsl native]} shaders]
-                  (let [f (io/file native)]
-                    {:name name :exists (.exists f)
-                     :match (and (.exists f) (= (canon (slurp f)) (canon wgsl)))}))]
-    (doseq [{:keys [name exists match]} results]
-      (cond
-        (not exists) (println (format "  ⊘ %s: native .wgsl not generated yet (run bb gen-wgsl)" name))
-        match        (println (format "  ✓ %s: native .wgsl is token-equivalent to kami.shaders — single source holds" name))
-        :else        (println (format "  ✗ %s: DRIFT — native .wgsl differs from kami.shaders" name))))
-    (when (and (some #{"--strict"} *command-line-args*) (not (every? :match results)))
-      (throw (ex-info "lit/shadow shader DRIFT (native ≠ kami.shaders)" {})))))
+(println "── shaders — kami.wgsl EDN ↔ native .wgsl single source ──")
+(let [results (for [{:keys [name wgsl native]} all]
+                (let [f (io/file native)]
+                  {:name name :exists (.exists f) :match (and (.exists f) (= (canon (slurp f)) (canon wgsl)))}))
+      present (filter :exists results)]
+  (doseq [{:keys [name exists match]} results]
+    (when exists (println (format "  %s %s" (if match "✓" "✗ DRIFT") name))))
+  (println (format "  %d/%d native shaders present & token-equivalent to the EDN"
+                   (count (filter :match present)) (count present)))
+  (when (and (some #{"--strict"} *command-line-args*) (not (every? :match present)))
+    (throw (ex-info "shader DRIFT (native ≠ kami.wgsl EDN)" {}))))
