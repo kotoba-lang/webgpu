@@ -22,8 +22,13 @@
       (is (= (canon (slurp f)) (canon generated))
           (str file " — kami.render-shaders must be token-equivalent to the shipping WGSL")))))
 
-(deftest scene-character-matches-shipping
-  (gate "scene_character.wgsl" (rs/scene-character)))
+(deftest scene-shaders-match-shipping
+  (gate "scene_character.wgsl" (rs/scene-character))
+  (gate "scene_voxel.wgsl"     (rs/scene-voxel))
+  (gate "scene_particle.wgsl"  (rs/scene-particle))
+  (gate "scene_terrain.wgsl"   (rs/scene-terrain))
+  (gate "scene_water.wgsl"     (rs/scene-water))
+  (gate "scene_sky.wgsl"       (rs/scene-sky)))
 
 (let [{:keys [fail error]} (run-tests 'render-shader-test)]
   (when (pos? (+ fail error))
