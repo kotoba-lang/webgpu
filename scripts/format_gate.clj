@@ -23,6 +23,7 @@
          '[kami.re :as kre]
          '[kami.toml :as ktoml]
          '[kami.cue :as kcue]
+         '[kami.css :as kcss]
          '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
 
@@ -208,6 +209,15 @@
                           [:-> :a :b {:label "go"}]
                           [:-> :b :c]))
            (shell {:out :string :err :string} "dot" "-Tsvg" (path "g.dot") "-o" (path "g.svg"))
+           true)}
+
+   {:name "css → esbuild" :tool "esbuild" :hint "npm i -g esbuild"
+    :run (fn []
+           (spit (path "style.css")
+                 (kcss/css {:rules {".card" {:border-radius 12 :padding [12 22] :color :white :background "#1a1a1a"}
+                                    ".card:hover" {:opacity 0.8 :transform "scale(1.02)"}}
+                            :keyframes {:fade [[0 {:opacity 0}] [100 {:opacity 1}]]}}))
+           (shell {:out :string :err :string} "esbuild" (path "style.css") "--minify")   ;; real CSS parse
            true)}
 
    {:name "materialx → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
