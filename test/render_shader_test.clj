@@ -10,10 +10,16 @@
 
 (def shaders-dir "../kami-engine/kami-render/src/shaders")
 
-;; token stream: drop WGSL line comments, whitespace, grouping/call parens, and trailing commas
-;; (all semantically insignificant) — what's left must match exactly.
+;; token stream: drop everything semantically insignificant in WGSL — line comments, whitespace,
+;; trailing commas (before } or )), the optional struct-terminating ';', and grouping/call parens.
+;; What's left must match exactly.
 (defn- canon [s]
-  (-> s (str/replace #"//[^\n]*" "") (str/replace #"[\s()]" "") (str/replace #",}" "}")))
+  (-> s
+      (str/replace #"//[^\n]*" "")     ;; line comments
+      (str/replace #"\s" "")           ;; whitespace
+      (str/replace #",(?=[}\)])" "")   ;; trailing comma before } or )
+      (str/replace #"};" "}")          ;; optional struct-terminating semicolon
+      (str/replace #"[()]" "")))       ;; grouping / call parens
 
 (defn- gate [file generated]
   (let [f (io/file shaders-dir file)]
@@ -27,9 +33,18 @@
   (gate "scene_voxel.wgsl"     (rs/scene-voxel))
   (gate "scene_particle.wgsl"  (rs/scene-particle))
   (gate "scene_terrain.wgsl"   (rs/scene-terrain))
-  (gate "scene_water.wgsl"     (rs/scene-water))
-  (gate "scene_sky.wgsl"       (rs/scene-sky))
-  (gate "rt_bvh_compute.wgsl"  (rs/rt-bvh-compute)))
+  (gate "scene_water.wgsl"      (rs/scene-water))
+  (gate "scene_sky.wgsl"        (rs/scene-sky))
+  (gate "scene_atlas.wgsl"      (rs/scene-atlas))
+  (gate "scene_vegetation.wgsl" (rs/scene-vegetation))
+  (gate "rt_bvh_compute.wgsl"   (rs/rt-bvh-compute))
+  (gate "mtoon.wgsl"            (rs/mtoon))
+  (gate "metahuman_hair.wgsl"   (rs/metahuman-hair))
+  (gate "gaussian_splat.wgsl"   (rs/gaussian-splat))
+  (gate "strand_compute.wgsl"   (rs/strand-compute))
+  (gate "skinned_mtoon.wgsl"    (rs/skinned-mtoon))
+  (gate "metahuman_skin.wgsl"   (rs/metahuman-skin))
+  (gate "pbr.wgsl"              (rs/pbr)))
 
 (let [{:keys [fail error]} (run-tests 'render-shader-test)]
   (when (pos? (+ fail error))
