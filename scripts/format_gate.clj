@@ -18,6 +18,7 @@
          '[kami.proto :as proto]
          '[kami.graphql :as gql]
          '[kami.json :as kjson]
+         '[kami.re :as kre]
          '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
 
@@ -75,6 +76,13 @@
            (shell {:out :string :err :string} "usdcat" (path "scene.usda"))       ;; parse + round-trip
            (shell {:out :string :err :string} "usdchecker" (path "scene.usda"))   ;; full schema compliance
            true)}
+
+   {:name "re → java.util.regex" :tool nil :hint "(clj-native: emitted regex must compile + match)"
+    :run (fn []
+           (let [form [:seq [:+ :digit] "." [:rep :digit 2 2]]   ;; → \d+\.\d{2,2}
+                 pat  (kre/re form)]                              ;; compiles via java.util.regex.Pattern
+             (spit (path "pat.re") (kre/rx form))
+             (and (some? (re-matches pat "3.14")) (nil? (re-matches pat "3.1")))))}
 
    {:name "json → cheshire" :tool nil :hint "(clj-native JSON round-trip — no external tool)"
     :run (fn []
