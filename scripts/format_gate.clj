@@ -12,7 +12,9 @@
          '[kami.usd :as usd]
          '[kami.otio :as otio]
          '[kami.gltf :as gltf]
-         '[kami.materialx :as mtlx])
+         '[kami.materialx :as mtlx]
+         '[kami.ocio :as ocio]
+         '[clj-yaml.core :as yamlc])
 
 (defn- have? [tool] (some? (fs/which tool)))
 
@@ -53,18 +55,33 @@
            (when (have? "spirv-val") (shell "spirv-val" (path "shader.spv")))   ;; validate if available
            true)}
 
-   {:name "usd → usdcat" :tool "usdcat" :hint "pip install usd-core"
+   {:name "usd → usdchecker" :tool "usdchecker" :hint "pip install usd-core"
     :run (fn []
            (spit (path "scene.usda")
-                 (usd/usda {:defaultPrim "hello" :upAxis :Y}
+                 (usd/usda {:defaultPrim "hello" :upAxis :Y :metersPerUnit 0.01}
                            [:def "Xform" :hello {:kind "component"}
                             [:attr "float3" "xformOp:translate" [0 1 0]]
                             [:attr "uniform token[]" :xformOpOrder [:array :xformOp:translate]]
-                            [:def "Sphere" :world
+                            [:def "Material" :mat]
+                            [:def "Sphere" :world {:apiSchemas [:array "MaterialBindingAPI"]}
                              [:attr "double" :radius 2]
-                             [:attr "color3f[]" "primvars:displayColor" [[1 0 0]]]]]))
-           (shell {:out :string :err :string} "usdcat" (path "scene.usda"))   ;; full parse + round-trip
+                             [:attr "color3f[]" "primvars:displayColor" [[1 0 0]]]
+                             [:rel :material:binding [:path "/hello/mat"]]]]))
+           (shell {:out :string :err :string} "usdcat" (path "scene.usda"))       ;; parse + round-trip
+           (shell {:out :string :err :string} "usdchecker" (path "scene.usda"))   ;; full schema compliance
            true)}
+
+   {:name "ocio → clj-yaml" :tool nil :hint "(clj-native YAML round-trip — no Python)"
+    :run (fn []
+           (let [src (ocio/config {:version 2 :roles {:default "raw" :scene_linear "ACEScg"}
+                                   :displays [(ocio/display "sRGB" (ocio/view "ACES" "ACEScg"))]
+                                   :active_displays ["sRGB"]
+                                   :colorspaces [(ocio/colorspace {:name "raw" :family "raw" :isdata true})
+                                                 (ocio/colorspace {:name "ACEScg" :family "ACES"})]})]
+             (spit (path "config.ocio") src)
+             (let [parsed (yamlc/parse-string (str/replace src #"!<[A-Za-z0-9_]+>" ""))]
+               (and (= "ACEScg" (get-in parsed [:roles :scene_linear]))
+                    (= 2 (count (:colorspaces parsed)))))))}
 
    {:name "otio → otiocat" :tool "otiocat" :hint "pipx install opentimelineio"
     :run (fn []

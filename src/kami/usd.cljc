@@ -36,11 +36,21 @@
 (defn- attr [[_ typ nm value]] (str typ " " (pname nm) " = " (val* value)))
 (defn- rel  [[_ nm value]]     (str "rel " (pname nm) " = " (val* value)))
 
+;; composition-arc metadata that USD list-edits — emitted with the idiomatic `prepend`.
+(def ^:private list-op #{:references :payload :inherits :specializes :apiSchemas :variantSets})
+(defn- meta-line [k v]
+  (str (when (list-op k) "prepend ") (pname k) " = " (val* v)))
+
+(defn- indent [s n]
+  (let [p (apply str (repeat n " "))] (str p (str/replace s "\n" (str "\n" p)))))
+
 (declare item)
-(defn- block [items] (str/join "\n" (map #(str "    " (str/replace (item %) "\n" "\n    ")) items)))
+(defn- block [items] (str/join "\n" (map #(indent (item %) 4) items)))
 
 (defn prim
-  "Compile one [spec type? name meta? & body] prim form to a USDA prim block."
+  "Compile one [spec type? name meta? & body] prim form to a USDA prim block. Prim metadata (a map
+   after the name) may carry composition arcs — :references :payload :inherits :apiSchemas
+   :variantSets — which are emitted as `prepend …`; other keys (e.g. :kind) emit as-is."
   [form]
   (let [[spec & r] form
         typ  (when (string? (first r)) (first r))
@@ -50,13 +60,25 @@
         meta (when (map? (first r)) (first r))
         body (if meta (rest r) r)]
     (str (name spec) (when typ (str " " typ)) " \"" (pname nm) "\""
-         (when meta (str " (" (str/join "; " (for [[k v] meta] (str (pname k) " = " (val* v)))) ")"))
-         "\n{\n" (block body) "\n}")))
+         (when (seq meta)
+           (str " (\n" (str/join "\n" (for [[k v] meta] (str "    " (meta-line k v)))) "\n)"))
+         (if (seq body) (str "\n{\n" (block body) "\n}") "\n{\n}"))))
+
+(defn- variant-set
+  "[:variant-set \"name\" {\"variant\" [body…] …}] → a USD variantSet block."
+  [[_ vname variants]]
+  (str "variantSet \"" vname "\" = {\n"
+       (str/join "\n" (for [[vn vbody] variants]
+                        (str "    \"" vn "\" {\n"
+                             (str/join "\n" (map #(indent (item %) 8) vbody))
+                             "\n    }")))
+       "\n}"))
 
 (defn- item [form]
   (case (first form)
-    :attr (attr form)
-    :rel  (rel form)
+    :attr        (attr form)
+    :rel         (rel form)
+    :variant-set (variant-set form)
     (prim form)))
 
 (defn usda

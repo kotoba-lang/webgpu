@@ -1,0 +1,26 @@
+(ns exr-test
+  "Golden tests for kami.exr — the OpenEXR *header* hiccup (pixels are binary / out of scope). They pin
+   the exrheader-style attribute listing: channel typing, box2i windows, compression/lineOrder enums,
+   defaults, and custom typed attributes."
+  (:require [clojure.test :refer [deftest is run-tests]]
+            [clojure.string :as str]
+            [kami.exr :as exr]))
+
+(deftest a-header-listing
+  (let [src (exr/header {:channels [{:name "R" :type :half} {:name "G" :type :half}
+                                    {:name "B" :type :half} {:name "A" :type :float}]
+                         :dataWindow [[0 0] [1919 1079]]
+                         :compression :zips
+                         :attributes {:owner {:type "string" :value "kami"}}})]
+    (is (str/starts-with? src "channels (type chlist):\n    R, 16-bit floating-point, sampling 1 1"))
+    (is (str/includes? src "    A, 32-bit floating-point, sampling 1 1"))
+    (is (str/includes? src "compression (type compression): zip, individual scanlines"))
+    (is (str/includes? src "dataWindow (type box2i): (0 0) - (1919 1079)"))
+    (is (str/includes? src "displayWindow (type box2i): (0 0) - (1919 1079)") "displayWindow defaults to dataWindow")
+    (is (str/includes? src "lineOrder (type lineOrder): increasing y") "default lineOrder")
+    (is (str/includes? src "screenWindowWidth (type float): 1") "default")
+    (is (str/includes? src "owner (type string): kami") "custom attribute")))
+
+(let [{:keys [fail error]} (run-tests 'exr-test)]
+  (when (pos? (+ fail error))
+    (throw (ex-info "exr tests failed" {:fail fail :error error}))))

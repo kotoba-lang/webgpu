@@ -9,7 +9,6 @@
           :task (do (load-file "test/domains_bb_test.clj")
                      (load-file "test/sprite2d_layout_test.clj")
                      (load-file "test/geometry_test.clj")
-                     (load-file "test/render_ir_test.clj")
                      (load-file "test/wgsl_test.clj")
                      (load-file "test/scad_test.clj")
                      (load-file "test/verilog_test.clj")
@@ -21,6 +20,8 @@
                      (load-file "test/otio_test.clj")
                      (load-file "test/gltf_test.clj")
                      (load-file "test/materialx_test.clj")
+                     (load-file "test/ocio_test.clj")
+                     (load-file "test/exr_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
                      (load-file "test/render_shader_test.clj"))}

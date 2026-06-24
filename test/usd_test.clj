@@ -25,7 +25,7 @@
                 [:attr "double" :radius 2]
                 [:attr "color3f[]" "primvars:displayColor" [[1 0 0]]]]])]
     (is (str/starts-with? src "#usda 1.0\n(\n    defaultPrim = \"hello\"\n    upAxis = \"Y\"\n)"))
-    (is (str/includes? src "def Xform \"hello\" (kind = \"component\")"))
+    (is (str/includes? src "def Xform \"hello\" (\n    kind = \"component\"\n)"))
     (is (str/includes? src "    def Sphere \"world\"\n    {\n        double radius = 2"))
     (is (str/includes? src "        color3f[] primvars:displayColor = [(1, 0, 0)]"))
     (is (= src (u/usda {:defaultPrim "hello" :upAxis :Y}
@@ -34,6 +34,29 @@
                    [:attr "double" :radius 2]
                    [:attr "color3f[]" "primvars:displayColor" [[1 0 0]]]]]))
         "deterministic")))
+
+(deftest composition-arcs
+  (let [src (u/usda {}
+              [:def "Xform" :hero
+               {:references [:asset "./base.usd"]
+                :apiSchemas [:array "MaterialBindingAPI"]
+                :kind "component"}
+               [:rel :material:binding [:path "/hero/mat"]]])]
+    (is (str/includes? src "prepend references = @./base.usd@") "references emitted with prepend")
+    (is (str/includes? src "prepend apiSchemas = [\"MaterialBindingAPI\"]") "apiSchemas list-op")
+    (is (str/includes? src "    kind = \"component\"") "plain metadata key unchanged")))
+
+(deftest variant-set
+  (let [src (u/prim
+              [:def "Xform" :car
+               {:variantSets [:array "wear"]}
+               [:variant-set "wear"
+                {"clean"   [[:def "Sphere" :body [:attr "double" :radius 2]]]
+                 "damaged" [[:def "Sphere" :body [:attr "double" :radius 1]]]}]])]
+    (is (str/includes? src "prepend variantSets = [\"wear\"]"))
+    (is (str/includes? src "variantSet \"wear\" = {"))
+    (is (str/includes? src "        \"clean\" {\n            def Sphere \"body\""))
+    (is (str/includes? src "        \"damaged\" {\n            def Sphere \"body\""))))
 
 (let [{:keys [fail error]} (run-tests 'usd-test)]
   (when (pos? (+ fail error))
