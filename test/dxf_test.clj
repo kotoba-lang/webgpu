@@ -22,6 +22,13 @@
          (d/entity [:lwpolyline {:points [[0 0] [10 0] [5 8]]}]))
       "vertex count→90, flags→70, each vertex→10/20"))
 
+(deftest reals-are-fixed-decimal
+  ;; (str (double v)) emits E notation for large/small values, which AutoCAD R12 + many parsers reject.
+  (is (= "0\nLINE\n10\n10000000.0\n20\n-0.00010"
+         (d/entity [:line {:from [1e7 -0.0001]}])) "1e7 / 1e-4 expand to plain decimal, no E")
+  (is (= "0\nCIRCLE\n40\n1234567890123.0" (d/entity [:circle {:radius 1234567890123}])) "large int real")
+  (is (not (re-find #"\d[eE][-+]?\d" (d/entity [:circle {:at [1e-9 3.5e8]}]))) "no scientific notation in values"))
+
 (deftest a-drawing-wraps-and-terminates
   (let [src (d/drawing [:line {:layer "0" :from [0 0] :to [100 50]}]
                        [:circle {:at [50 50] :radius 25}])]

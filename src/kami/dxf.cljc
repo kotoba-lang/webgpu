@@ -20,7 +20,24 @@
   {:layer 8 :color 62 :linetype 6 :handle 5 :name 2 :text 1 :thickness 39 :elevation 38
    :radius 40 :height 40 :start 50 :rotation 50 :end 51})   ;; aliases share a code (one per entity)
 
-(defn- real [v] (str (double v)))                  ;; DXF reals always carry a decimal point: 0 → "0.0"
+(defn- real
+  "DXF real → fixed-decimal string (never scientific). AutoCAD R12 and many DXF parsers reject E
+   notation, which (str (double v)) emits for large/small values (1e7 → 1.0E7, 0.0001 → 1.0E-4); this
+   expands it to plain decimal. cljc-portable (pure string, no platform Big-decimal)."
+  [v]
+  (let [s (str (double v))]
+    (if-not (re-find #"[eE]" s)
+      (if (str/includes? s ".") s (str s ".0"))
+      (let [[_ sign mant exp] (re-matches #"(-?)(\d+(?:\.\d+)?)[eE]([-+]?\d+)" s)
+            exp   #?(:clj (Integer/parseInt exp) :cljs (js/parseInt exp 10))
+            [ip fp] (str/split mant #"\.")
+            digits (str ip (or fp ""))
+            point  (+ (count ip) exp)]                   ;; decimal-point index within `digits`
+        (str sign
+             (cond
+               (<= point 0)               (str "0." (apply str (repeat (- point) "0")) digits)
+               (>= point (count digits))  (str digits (apply str (repeat (- point (count digits)) "0")) ".0")
+               :else                      (str (subs digits 0 point) "." (subs digits point))))))))
 
 (defn- code-val [code v]
   [(str code) (cond (< code 10) (str v)            ;; strings (entity type, layer, text, linetype)
