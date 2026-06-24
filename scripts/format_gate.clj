@@ -6,6 +6,7 @@
          '[babashka.fs :as fs]
          '[clojure.string :as str]
          '[kami.scad :as scad]
+         '[kami.wgsl :as wgsl]
          '[kami.spirv :as spirv]
          '[kami.kicad :as kicad]
          '[kami.spice :as spice]
@@ -41,6 +42,16 @@
                             [:for [:i [:range 0 3]]
                              [:translate [[:* :i 25] 0 0] [:washer 20 8 3]]]))
            (shell {:out :string :err :string} "openscad" "-o" (path "part.csg") (path "part.scad"))
+           true)}
+
+   {:name "wgsl → naga" :tool "naga" :hint "cargo install naga-cli"
+    :run (fn []
+           (spit (path "shader.wgsl")
+                 (wgsl/shader
+                   (wgsl/func :fs {:stage :fragment :ret [:loc 0 [:vec4 :f32]]}
+                              [:let :c [:vec3 1.0 0.0 0.0]]
+                              [:return [:vec4 [:* :c 2.0] 1.0]])))
+           (shell {:out :string :err :string} "naga" (path "shader.wgsl"))   ;; wgpu's translator: parse + validate
            true)}
 
    {:name "spirv → spirv-as" :tool "spirv-as" :hint "brew install spirv-tools"
