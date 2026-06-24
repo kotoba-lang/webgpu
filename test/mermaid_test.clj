@@ -16,6 +16,12 @@
   (is (= "A ==> B"         (m/stmt [:==> :A :B])) "thick")
   (is (= "subgraph grp\n  A --> B\nend" (m/stmt [:subgraph :grp [:--> :A :B]])) "subgraph nesting"))
 
+(deftest label-escaping
+  (is (= "a[\"a]b (x)\"]" (m/stmt [:node :a {:label "a]b (x)"}])) "delimiter chars → quoted label")
+  (is (= "c[\"say #quot;hi#quot;\"]" (m/stmt [:node :c {:label "say \"hi\""}])) "internal quote → #quot;")
+  (is (= "B[Decision]" (m/stmt [:node :B {:label "Decision"}])) "plain label stays bare")
+  (is (= "A -->|\"a|b\"| B" (m/stmt [:--> :A :B {:label "a|b"}])) "pipe in edge label → quoted"))
+
 (deftest a-flowchart
   (let [src (m/flowchart :LR
               [:node :A {:label "Start"}]

@@ -16,13 +16,22 @@
 
 (defn- id [x] (if (keyword? x) (name x) (str x)))
 
+(defn- mlabel
+  "A node/edge label. Mermaid breaks on shape/flow delimiters in raw text, so a label containing any of
+   []{}()|\"#<> is wrapped in double quotes (with internal \" → #quot;); a plain label is left bare."
+  [s]
+  (let [s (str s)]
+    (if (re-find #"[\[\]{}()|\"#<>]" s)
+      (str \" (str/replace s "\"" "#quot;") \")
+      s)))
+
 (def ^:private shapes {:square ["[" "]"] :round ["(" ")"] :stadium ["([" "])"]
                        :diamond ["{" "}"] :circle ["((" "))"] :hexagon ["{{" "}}"]
                        :subroutine ["[[" "]]"] :cylinder ["[(" ")]"]})
 (def ^:private arrows {:--> "-->" :--- "---" :-.-> "-.->" :==> "==>" :--x "--x" :--o "--o"})
 
 (defn- node-decl [nid {:keys [label shape] :or {shape :square}}]
-  (if label (let [[o c] (shapes shape)] (str (id nid) o label c)) (id nid)))
+  (if label (let [[o c] (shapes shape)] (str (id nid) o (mlabel label) c)) (id nid)))
 
 (declare stmt)
 (defn- block [stmts] (str/join "\n" (map #(str "  " (str/replace (stmt %) "\n" "\n  ")) stmts)))
@@ -36,7 +45,7 @@
       (= op :subgraph) (let [[nm & body] more] (str "subgraph " (id nm) "\n" (block body) "\nend"))
       (arrows op)      (let [[a b opts] more]
                          (str (id a) " " (arrows op)
-                              (when (:label opts) (str "|" (:label opts) "|")) " " (id b)))
+                              (when (:label opts) (str "|" (mlabel (:label opts)) "|")) " " (id b)))
       :else            (id op))))
 
 (defn flowchart
