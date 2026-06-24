@@ -24,6 +24,18 @@
   (is (= "return vec4<f32>(c, 1.0);" (w/stmt [:return [:vec4 :c 1.0]])))
   (is (str/starts-with? (w/stmt [:if [:> :a 0.0] [[:set :c :a]]]) "if ((a > 0.0)) {")))
 
+(deftest compute-and-storage
+  (is (= "@group(0) @binding(1) var<storage, read_write> buf: array<f32>;"
+         (w/binding* {:group 0 :binding 1 :space :storage :access :read_write} :buf "array<f32>"))
+      "storage buffer with access mode")
+  (is (= "@group(0) @binding(0) var<uniform> g: G;"
+         (w/binding* {:group 0 :binding 0 :space :uniform} :g :G)) "plain uniform (no access)")
+  (let [cs (apply w/func :cs {:stage :compute :workgroup-size [8 8 1]
+                              :params [[:gid [:vec3 :u32] {:builtin :global-invocation-id}]]}
+                  [[:return]])]
+    (is (str/starts-with? cs "@compute @workgroup_size(8, 8, 1)\nfn cs(@builtin(global_invocation_id) gid: vec3<u32>)")
+        "compute entry with workgroup size + global-invocation-id builtin")))
+
 (deftest a-lighting-fragment-compiles
   (let [src (w/func :fs {:stage :fragment :params [[:i :VO]] :ret [:loc 0 [:vec4 :f32]]}
                     [:let :N   [:normalize :i.n]]

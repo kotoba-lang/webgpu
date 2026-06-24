@@ -39,10 +39,15 @@
                       :vec2f "vec2f" :vec3f "vec3f" :vec4f "vec4f"
                       :mat3x3f "mat3x3f" :mat4x4f "mat4x4f"})
 
+(def ^:private vec-heads {:vec2 "vec2" :vec3 "vec3" :vec4 "vec4" :mat3 "mat3x3" :mat4 "mat4x4"})
+
 (defn- type-str [t]
-  (cond (string? t) t                                    ;; exotic types (texture_depth_2d…) pass through
-        (vector? t) (or (ctors (first t)) (ident (first t)))   ;; [:vec4 :f32] → vec4<f32>
-        :else       (or (ctors t) (ident t))))                 ;; :mat4 → mat4x4<f32>, :G → G
+  (cond (string? t) t                                    ;; exotic types (texture_depth_2d, array<…>) pass through
+        (vector? t) (let [[head elem] t]                 ;; [:vec3 :u32] → vec3<u32>, [:vec4 :f32] → vec4<f32>
+                      (if-let [base (vec-heads head)]
+                        (str base "<" (type-str (or elem :f32)) ">")
+                        (or (ctors head) (ident head))))
+        :else       (or (ctors t) (ident t))))                 ;; :mat4 → mat4x4<f32>, :vec3f → vec3f, :G → G
 
 (defn- wgsl-call [op args]                ;; vecN/matN → typed ctor; else plain (kebab→snake) call
   (str (or (ctors op) (ident op)) "(" (str/join ", " args) ")"))
@@ -78,7 +83,7 @@
       :-=     (str (ident (first xs)) " -= " (expr (second xs)) ";")
       :++     (str (ident (first xs)) "++;")
       :--     (str (ident (first xs)) "--;")
-      :return (str "return " (expr (first xs)) ";")
+      :return (if (seq xs) (str "return " (expr (first xs)) ";") "return;")
       :if     (str "if (" (expr (first xs)) ") {\n" (block (second xs)) "\n}"
                    (when (> (count xs) 2) (str " else {\n" (block (nth xs 2)) "\n}")))
       :for    (let [[init cnd step & body] xs]
@@ -96,16 +101,24 @@
 
 (defn func
   "Compile a function form to a WGSL function declaration.
-   opts: {:stage :vertex|:fragment? :params [[name type attr?] …] :ret type-or-[:loc n type]}."
-  [name {:keys [stage params ret]} & body]
+   opts: {:stage :vertex|:fragment|:compute? :workgroup-size n-or-[x y z]? (compute)
+          :params [[name type attr?] …] :ret type-or-[:loc n type]-or-[:builtin b type]}."
+  [name {:keys [stage workgroup-size params ret]} & body]
   (let [ret* (cond
                (nil? ret) nil
                (and (vector? ret) (= :loc (first ret)))
                (str "@location(" (second ret) ") " (type-str (nth ret 2)))
                (and (vector? ret) (= :builtin (first ret)))
                (str "@builtin(" (ident (second ret)) ") " (type-str (nth ret 2)))
-               :else (type-str ret))]
-    (str (when stage (str "@" (ident stage) "\n"))
+               :else (type-str ret))
+        stage* (cond
+                 (= stage :compute)
+                 (str "@compute"
+                      (when workgroup-size
+                        (str " @workgroup_size(" (str/join ", " (if (vector? workgroup-size) workgroup-size [workgroup-size])) ")"))
+                      "\n")
+                 stage (str "@" (ident stage) "\n"))]
+    (str stage*
          "fn " (ident name) "(" (str/join ", " (map param-str params)) ")"
          (when ret* (str " -> " ret*)) " {\n" (block body) "\n}")))
 
@@ -115,10 +128,12 @@
   (str "struct " (ident name) " { " (str/join ", " (map param-str fields)) " };"))
 
 (defn binding*
-  "A @group/@binding resource var. opts {:group :binding :space?(:uniform/:storage)}."
-  [{:keys [group binding space]} name type]
+  "A @group/@binding resource var. opts {:group :binding :space?(:uniform/:storage) :access?(:read/:read_write)}.
+   With :access → var<space, access> (storage buffers); without → var<space> or bare var (textures)."
+  [{:keys [group binding space access]} name type]
   (str "@group(" group ") @binding(" binding ") var"
-       (when space (str "<" (ident space) ">")) " " (ident name) ": " (type-str type) ";"))
+       (when space (str "<" (ident space) (when access (str ", " (ident access))) ">"))
+       " " (ident name) ": " (type-str type) ";"))
 
 (defn shader
   "Assemble top-level items (struct*/binding*/func strings) into one WGSL source string."
