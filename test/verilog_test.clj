@@ -21,8 +21,31 @@
   (is (= "reg [3:0] q;"   (v/stmt [:reg :q 4])))
   (is (= "assign y = (sel ? a : b);" (v/stmt [:assign :y [:? :sel :a :b]])))
   (is (= "q <= (q + 1);"  (v/stmt [:<= :q [:+ :q 1]])) "nonblocking")
-  (is (= "always @(posedge clk) q <= d;"
-         (v/stmt [:always [:posedge :clk] [:<= :q :d]])) "single-stmt always, no begin/end"))
+  (is (= "parameter WIDTH = 8;" (v/stmt [:param :WIDTH 8])))
+  (is (= "always @(posedge clk) begin\n  q <= d;\nend"
+         (v/stmt [:always [:posedge :clk] [:<= :q :d]])) "always is fully bracketed"))
+
+(deftest case-statement
+  (is (= (str "case (sel)\n"
+              "  0: y <= a;\n"
+              "  1: y <= b;\n"
+              "  default: y <= 0;\n"
+              "endcase")
+         (v/stmt [:case :sel
+                  [[0 [[:<= :y :a]]]
+                   [1 [[:<= :y :b]]]
+                   [:default [[:<= :y 0]]]]]))))
+
+(deftest parametrised-module-header
+  (let [src (v/module :reg_n {:params [[:WIDTH 8]]}
+              [[:input :clk]
+               [:input :d [[:- :WIDTH 1] 0]]
+               [:output :reg :q [[:- :WIDTH 1] 0]]]
+              [:always [:posedge :clk] [:<= :q :d]])]
+    (is (str/includes? src "module reg_n #(\n  parameter WIDTH = 8\n) ("))
+    (is (str/includes? src "input [(WIDTH - 1):0] d") "parametrised port width via expr")
+    (is (str/includes? src "output reg [(WIDTH - 1):0] q"))
+    (is (str/includes? src "always @(posedge clk) begin"))))
 
 (deftest a-counter-compiles
   (let [src (v/module :counter

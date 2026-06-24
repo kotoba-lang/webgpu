@@ -11,12 +11,14 @@
    Ports (ANSI header):  [:input :clk]  ·  [:output :reg :q 8]  ·  [:input :d [7 0]]
    Body / procedural:
      [:wire :y 8] [:reg :q 4]            → wire [7:0] y;  reg [3:0] q;
+     [:param :N 8] [:localparam :M 3]    → parameter N = 8;  localparam M = 3;
      [:assign lhs e]                     → assign lhs = e;
-     [:always sens stmt…]                → always @(sens) begin … end
+     [:always sens stmt…]                → always @(sens) begin … end   (always bracketed)
        sens: :*  ·  [:posedge :clk]  ·  [[:posedge :clk] [:negedge :rst]]
      [:<= lhs e]  (nonblocking)  ·  [:set lhs e]  (blocking)  ·  [:if c [then…] [else…]]
+     [:case e [[v0 [stmt…]] … [:default [stmt…]]]]   → case (e) … endcase
      [:inst :dff :u1 {:clk :clk :d :d :q :q}]   → dff u1 (.clk(clk), .d(d), .q(q));
-   Top level:  (module :name [port…] item…)"
+   Top level:  (module :name [port…] item…)  ·  (module :name {:params [[:N 8]]} [port…] item…)"
   (:require [clojure.string :as str]
             [kami.expr :as kx]))
 
@@ -36,12 +38,13 @@
 
 (defn- width
   "A bus width spec → `[hi:lo] ` (trailing space) or `` for a 1-bit net.
-   A number N → [N-1:0]; an explicit [hi lo] vector → [hi:lo]."
+   A number N → [N-1:0]; a [hi lo] vector → [hi:lo], where hi/lo may be expressions
+   (so a parametrised `[[:- :WIDTH 1] 0]` → [(WIDTH - 1):0])."
   [w]
   (cond
     (nil? w)     ""
     (number? w)  (str "[" (dec w) ":0] ")
-    (vector? w)  (str "[" (first w) ":" (second w) "] ")
+    (vector? w)  (str "[" (expr (first w)) ":" (expr (second w)) "] ")
     :else        ""))
 
 (defn- port
@@ -63,6 +66,12 @@
          (str/join "\n" (map #(str "  " (str/replace (stmt %) "\n" "\n  ")) stmts))
          "\nend")))
 
+(defn- indent [s] (str/replace s "\n" "\n  "))
+
+(defn- begin-end                                        ;; always-blocks read clearest fully bracketed
+  [stmts]
+  (str "begin\n" (str/join "\n" (map #(str "  " (indent (stmt %))) stmts)) "\nend"))
+
 (defn- edge [[e sig]] (str (name e) " " (ident sig)))   ;; [:posedge :clk] → posedge clk
 
 (defn- sens [s]
@@ -76,25 +85,44 @@
   [s]
   (let [[op & xs] s]
     (case op
-      :wire   (str "wire " (width (second xs)) (ident (first xs)) ";")
-      :reg    (str "reg "  (width (second xs)) (ident (first xs)) ";")
-      :assign (str "assign " (expr (first xs)) " = " (expr (second xs)) ";")
-      :<=     (str (expr (first xs)) " <= " (expr (second xs)) ";")   ;; nonblocking
-      :set    (str (expr (first xs)) " = "  (expr (second xs)) ";")   ;; blocking
-      :always (str "always @(" (sens (first xs)) ") " (pblock (rest xs)))
-      :if     (str "if (" (expr (first xs)) ") " (pblock (second xs))
-                   (when (> (count xs) 2) (str "\nelse " (pblock (nth xs 2)))))
-      :inst   (let [[mod nm conns] xs]
-                (str (ident mod) " " (ident nm) " (\n"
-                     (str/join ",\n" (for [[p sig] conns] (str "  ." (ident p) "(" (expr sig) ")")))
-                     "\n);"))
+      :wire       (str "wire " (width (second xs)) (ident (first xs)) ";")
+      :reg        (str "reg "  (width (second xs)) (ident (first xs)) ";")
+      :param      (str "parameter "  (ident (first xs)) " = " (expr (second xs)) ";")
+      :localparam (str "localparam " (ident (first xs)) " = " (expr (second xs)) ";")
+      :assign     (str "assign " (expr (first xs)) " = " (expr (second xs)) ";")
+      :<=         (str (expr (first xs)) " <= " (expr (second xs)) ";")   ;; nonblocking
+      :set        (str (expr (first xs)) " = "  (expr (second xs)) ";")   ;; blocking
+      :always     (str "always @(" (sens (first xs)) ") " (begin-end (rest xs)))
+      :if         (str "if (" (expr (first xs)) ") " (pblock (second xs))
+                       (when (> (count xs) 2) (str "\nelse " (pblock (nth xs 2)))))
+      :case       (str "case (" (expr (first xs)) ")\n"
+                       (str/join "\n"
+                         (for [[v body] (second xs)]
+                           (str "  " (indent (str (if (= :default v) "default" (expr v))
+                                                   ": " (pblock body))))))
+                       "\nendcase")
+      :inst       (let [[mod nm conns] xs]
+                    (str (ident mod) " " (ident nm) " (\n"
+                         (str/join ",\n" (for [[p sig] conns] (str "  ." (ident p) "(" (expr sig) ")")))
+                         "\n);"))
       (str (expr s) ";"))))   ;; bare expression / system task ($display …)
 
 (defn module
-  "Compile a module form to Verilog. ports is a vector of ANSI port specs; body is item statements."
-  [name ports & body]
-  (str "module " (ident name) " (\n"
-       (str/join ",\n" (map #(str "  " (port %)) ports))
-       "\n);\n"
-       (str/join "\n" (map #(str "  " (str/replace (stmt %) "\n" "\n  ")) body))
-       "\nendmodule"))
+  "Compile a module form to Verilog.
+     (module :name [port…] item…)
+     (module :name {:params [[:WIDTH 8] …]} [port…] item…)   ;; Verilog-2001 #(parameter …) header
+   ports is a vector of ANSI port specs; body is item statements."
+  [name & more]
+  (let [opts          (when (map? (first more)) (first more))
+        [ports & body] (if opts (rest more) more)
+        params        (:params opts)]
+    (str "module " (ident name)
+         (when (seq params)
+           (str " #(\n"
+                (str/join ",\n" (for [[pn pv] params] (str "  parameter " (ident pn) " = " (expr pv))))
+                "\n)"))
+         " (\n"
+         (str/join ",\n" (map #(str "  " (port %)) ports))
+         "\n);\n"
+         (str/join "\n" (map #(str "  " (indent (stmt %))) body))
+         "\nendmodule")))
