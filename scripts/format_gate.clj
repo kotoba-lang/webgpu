@@ -15,6 +15,7 @@
          '[kami.materialx :as mtlx]
          '[kami.ocio :as ocio]
          '[kami.dot :as dot]
+         '[kami.proto :as proto]
          '[clj-yaml.core :as yamlc])
 
 (defn- have? [tool] (some? (fs/which tool)))
@@ -103,6 +104,20 @@
                              :nodes [(gltf/node {:name "root" :translation [0 1 0]})]
                              :materials [(gltf/material "red" [1 0 0 1])]}))
            (shell {:out :string :err :string} "node" "scripts/gltf_validate.js" (path "scene.gltf"))
+           true)}
+
+   {:name "proto → protoc" :tool "protoc" :hint "brew install protobuf"
+    :run (fn []
+           (spit (path "example.proto")
+                 (proto/proto {:package "example"}
+                              [:message :Person
+                               [:field :string :name 1] [:field :int32 :id 2]
+                               [:repeated :string :emails 3]
+                               [:enum :Phone [:MOBILE 0] [:HOME 1]]]
+                              [:service :Greeter [:rpc :SayHello :Person :Person]]))
+           (shell {:out :string :err :string}
+                  "protoc" (str "--proto_path=" tmp) (str "--descriptor_set_out=" (path "out.pb"))
+                  (path "example.proto"))   ;; real protoc compile → descriptor set
            true)}
 
    {:name "dot → graphviz" :tool "dot" :hint "brew install graphviz"

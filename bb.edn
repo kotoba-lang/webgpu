@@ -23,6 +23,7 @@
                      (load-file "test/ocio_test.clj")
                      (load-file "test/exr_test.clj")
                      (load-file "test/dot_test.clj")
+                     (load-file "test/proto_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
                      (load-file "test/render_shader_test.clj"))}
