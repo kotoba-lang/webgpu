@@ -14,7 +14,8 @@
   (is (= "sphere(r=5, $fn=64);"           (s/node [:sphere {:r 5 :$fn 64}])) "$fn key passes through")
   (is (= "cylinder(h=10, r1=5, r2=0);"    (s/node [:cylinder {:h 10 :r1 5 :r2 0}])))
   (is (= "text(\"Hi\", size=8);"          (s/node [:text "Hi" {:size 8}])) "positional + named")
-  (is (= "polygon([[0, 0], [10, 0], [5, 8]]);" (s/node [:polygon [[0 0] [10 0] [5 8]]]))))
+  (is (= "polygon([[0, 0], [10, 0], [5, 8]]);" (s/node [:polygon [[0 0] [10 0] [5 8]]])))
+  (is (= "text(\"say \\\"hi\\\"\");" (s/node [:text "say \"hi\""])) "internal quotes escaped, not broken"))
 
 (deftest for-comprehension
   (is (= "for (i = [0:5]) {\n  translate([(i * 10), 0, 0]) {\n    sphere(2);\n  }\n}"

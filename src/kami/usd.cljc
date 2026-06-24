@@ -20,6 +20,8 @@
 
 (defn- pname [x] (if (keyword? x) (name x) (str x)))   ;; prim/property name (keeps ns colons in strings)
 
+(defn- qstr [s] (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))  ;; escape "/\\
+
 (declare val*)
 (defn- val* [v]
   (cond
@@ -29,8 +31,8 @@
     (vector? v) (if (every? vector? v)                                   ;; array of tuples
                   (str "[" (str/join ", " (map val* v)) "]")
                   (str "(" (str/join ", " (map val* v)) ")"))            ;; tuple (float3 / color3f / …)
-    (string? v)  (str \" v \")
-    (keyword? v) (str \" (name v) \")        ;; token literal
+    (string? v)  (qstr v)                    ;; quoted string, internal " / \ escaped
+    (keyword? v) (qstr (name v))             ;; token literal
     :else        (str v)))                    ;; number
 
 (defn- attr [[_ typ nm value]] (str typ " " (pname nm) " = " (val* value)))

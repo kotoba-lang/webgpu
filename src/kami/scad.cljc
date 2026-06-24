@@ -26,13 +26,15 @@
 
 (defn- expr [e] (kx/compile {:ident ident} e))     ;; arithmetic/calls — shared infix algebra, SCAD idents
 
+(defn- qstr [s] (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))  ;; escape "/\\
+
 (declare val*)
 
 (defn- val* [v]
   (cond
     (boolean? v) (str v)                                   ;; true/false (e.g. :center true) — before number?
     (number? v)  (str v)                                   ;; ints stay ints, floats stay floats (SCAD takes both)
-    (string? v)  (str \" v \")                             ;; quoted string literal
+    (string? v)  (qstr v)                                  ;; quoted string literal, internal " / \ escaped
     (keyword? v) (name v)                                  ;; bareword (an enum-ish value)
     (vector? v)  (if (keyword? (first v))                  ;; keyword head = expression; numbers = a point/size
                    (expr v)

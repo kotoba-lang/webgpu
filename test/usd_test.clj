@@ -16,7 +16,9 @@
   (is (= "int[] indices = [0, 1, 2]" (#'u/attr [:attr "int[]" :indices [:array 0 1 2]])) "scalar array")
   (is (= "asset file = @./tex.png@"  (#'u/attr [:attr "asset" :file [:asset "./tex.png"]])))
   (is (= "rel material:binding = </World/mat>"
-         (#'u/rel [:rel "material:binding" [:path "/World/mat"]]))))
+         (#'u/rel [:rel "material:binding" [:path "/World/mat"]])))
+  (is (= "string note = \"he said \\\"hi\\\"\""
+         (#'u/attr [:attr "string" :note "he said \"hi\""])) "internal quotes escaped"))
 
 (deftest a-scene-layer-compiles
   (let [src (u/usda {:defaultPrim "hello" :upAxis :Y}

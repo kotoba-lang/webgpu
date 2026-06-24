@@ -18,10 +18,11 @@
   (:require [clojure.string :as str]))
 
 (defn- token [s] (str/replace (name s) "-" "_"))   ;; :kicad-pcb → kicad_pcb, :fp-line → fp_line
+(defn- qstr [s] (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))  ;; escape "/\\
 
 (defn- atom* [x]
   (cond
-    (string? x)  (str \" x \")           ;; quoted string (layer/name/uuid)
+    (string? x)  (qstr x)                ;; quoted string (layer/name/uuid), internal " / \ escaped
     (keyword? x) (token x)               ;; bareword token (smd, roundrect, yes)
     (symbol? x)  (name x)
     :else        (str x)))               ;; number literal

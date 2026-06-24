@@ -12,7 +12,8 @@
   (is (= "(generator \"pcbnew\")"  (k/sexp [:generator "pcbnew"])) "string stays quoted")
   (is (= "(at 10 20 0)"            (k/sexp [:at 10 20 0])))
   (is (= "(layer \"F.Cu\")"        (k/sexp [:layer "F.Cu"])))
-  (is (= "(kicad_sym smd)"         (k/sexp [:kicad-sym :smd])) "kebab→snake token + bareword keyword"))
+  (is (= "(kicad_sym smd)"         (k/sexp [:kicad-sym :smd])) "kebab→snake token + bareword keyword")
+  (is (= "(property \"Ref\" \"a\\\"b\")" (k/sexp [:property "Ref" "a\"b"])) "internal quotes escaped"))
 
 (deftest nested-breaks-onto-lines
   (is (= "(pad \"1\" smd roundrect\n  (at -1 0)\n  (size 1 1.25)\n  (layers \"F.Cu\")\n)"
