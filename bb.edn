@@ -29,6 +29,7 @@
                      (load-file "test/yaml_test.clj")
                      (load-file "test/mermaid_test.clj")
                      (load-file "test/re_test.clj")
+                     (load-file "test/toml_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
                      (load-file "test/render_shader_test.clj"))}

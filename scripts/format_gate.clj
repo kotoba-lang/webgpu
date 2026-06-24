@@ -19,6 +19,7 @@
          '[kami.graphql :as gql]
          '[kami.json :as kjson]
          '[kami.re :as kre]
+         '[kami.toml :as ktoml]
          '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
 
@@ -149,6 +150,16 @@
            (shell {:out :string :err :string}
                   "protoc" (str "--proto_path=" tmp) (str "--descriptor_set_out=" (path "out.pb"))
                   (path "example.proto"))   ;; real protoc compile → descriptor set
+           true)}
+
+   {:name "toml → taplo" :tool "taplo" :hint "cargo install taplo-cli"
+    :run (fn []
+           (spit (path "config.toml")
+                 (ktoml/toml {:title "kami config"
+                              :package {:name "kami" :version "0.1.0" :keywords ["edn" "hiccup"] :edition 2021}
+                              :dependencies {:serde {:version "1.0" :features ["derive"]}}
+                              :bin [{:name "app" :path "src/main.rs"} {:name "tool"}]}))
+           (shell {:out :string :err :string} "taplo" "check" (path "config.toml"))   ;; real TOML parse
            true)}
 
    {:name "dot → graphviz" :tool "dot" :hint "brew install graphviz"
