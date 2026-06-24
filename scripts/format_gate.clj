@@ -22,6 +22,7 @@
          '[kami.json :as kjson]
          '[kami.re :as kre]
          '[kami.toml :as ktoml]
+         '[kami.cue :as kcue]
          '[cheshire.core :as cheshire]
          '[clj-yaml.core :as yamlc])
 
@@ -175,6 +176,15 @@
            (shell {:out :string :err :string}
                   "protoc" (str "--proto_path=" tmp) (str "--descriptor_set_out=" (path "out.pb"))
                   (path "example.proto"))   ;; real protoc compile → descriptor set
+           true)}
+
+   {:name "cue → cue vet" :tool "cue" :hint "brew install cue"
+    :run (fn []
+           (spit (path "config.cue")
+                 (kcue/cue {:host "localhost" :port 8080 :tags ["a" "b"]
+                            :server {:timeout 30 :tls true}
+                            :#Person {:name :string :age :int}}))
+           (shell {:out :string :err :string} "cue" "vet" (path "config.cue"))   ;; real CUE parse + validate
            true)}
 
    {:name "toml → taplo" :tool "taplo" :hint "cargo install taplo-cli"
