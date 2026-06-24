@@ -22,6 +22,7 @@
          '[kami.capnp :as capnp]
          '[kami.graphql :as gql]
          '[kami.json :as kjson]
+         '[kami.geojson :as geojson]
          '[kami.re :as kre]
          '[kami.toml :as ktoml]
          '[kami.cue :as kcue]
@@ -100,6 +101,18 @@
                  pat  (kre/re form)]                              ;; compiles via java.util.regex.Pattern
              (spit (path "pat.re") (kre/rx form))
              (and (some? (re-matches pat "3.14")) (nil? (re-matches pat "3.1")))))}
+
+   {:name "geojson → cheshire" :tool nil :hint "(clj-native JSON round-trip — no external tool)"
+    :run (fn []
+           (let [doc (geojson/feature-collection
+                       (geojson/feature (geojson/point 102.0 0.5) {:name "A"})
+                       (geojson/feature (geojson/line-string [[102 0] [103 1]]) {}))
+                 src (geojson/geojson doc)]
+             (spit (path "map.geojson") src)
+             (let [p (cheshire/parse-string src true)]
+               (and (= "FeatureCollection" (:type p))
+                    (= 2 (count (:features p)))
+                    (= "Point" (get-in p [:features 0 :geometry :type]))))))}
 
    {:name "json → cheshire" :tool nil :hint "(clj-native JSON round-trip — no external tool)"
     :run (fn []

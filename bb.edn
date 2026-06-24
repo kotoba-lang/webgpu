@@ -37,6 +37,7 @@
                      (load-file "test/srt_test.clj")
                      (load-file "test/graphml_test.clj")
                      (load-file "test/mathml_test.clj")
+                     (load-file "test/geojson_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
                      (load-file "test/render_shader_test.clj"))}
