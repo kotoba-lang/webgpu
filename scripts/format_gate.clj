@@ -15,6 +15,7 @@
          '[kami.gltf :as gltf]
          '[kami.materialx :as mtlx]
          '[kami.graphml :as graphml]
+         '[kami.mathml :as mathml]
          '[kami.ocio :as ocio]
          '[kami.dot :as dot]
          '[kami.proto :as proto]
@@ -219,6 +220,16 @@
                                     ".card:hover" {:opacity 0.8 :transform "scale(1.02)"}}
                             :keyframes {:fade [[0 {:opacity 0}] [100 {:opacity 1}]]}}))
            (shell {:out :string :err :string} "esbuild" (path "style.css") "--minify")   ;; real CSS parse
+           true)}
+
+   {:name "mathml → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
+    :run (fn []
+           (spit (path "m.mml")
+                 (mathml/mathml {:display :block}
+                                (mathml/row [:mi "x"] [:mo "="]
+                                            (mathml/frac (mathml/row [:mo "-"] [:mi "b"])
+                                                         (mathml/row [:mn 2] [:mi "a"])))))
+           (shell {:out :string :err :string} "xmllint" "--noout" (path "m.mml"))   ;; well-formedness
            true)}
 
    {:name "graphml → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
