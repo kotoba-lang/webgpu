@@ -53,10 +53,49 @@
                   [])))
             fx)))
 
+(defn- abs [x] (if (neg? x) (- x) x))
+
+(defn terrain-quads
+  "The platformer :solids as quads — each solid an earth rect with a grass band on top, placed
+   camera-relative (sx/sy), matching draw-2d!. shape 1 = box."
+  [scene sx sy k]
+  (into []
+    (mapcat (fn [s]
+              (let [x0 (nth s 0) x1 (nth s 1) yt (nth s 2) th (nth s 3 4000)
+                    fill (nth s 4 [0.42 0.30 0.20]) top (nth s 5 [0.40 0.74 0.34])
+                    L (sx x0) R (sx x1) T (sy yt) B (sy (- yt th))
+                    cx (/ (+ L R) 2.0) hw (/ (abs (- R L)) 2.0)]
+                [{:pos [cx (/ (+ T B) 2.0)] :size [hw (/ (abs (- B T)) 2.0)] :rot 0.0 :shape 1 :color (rgba fill)}
+                 {:pos [cx (+ T (* 7.0 k))]  :size [hw (* 13.0 k)]            :rot 0.0 :shape 1 :color (rgba top)}]))
+            (get-in scene [:platformer :solids]))))
+
+(defn tree-quads
+  "Background trees as quads — a shadow ellipse + canopy circle + highlight, camera-relative, culled
+   to roughly on-screen. Matches draw-2d!'s tree painting (shape 0 = circle/ellipse)."
+  [scene sx sy k W]
+  (let [cfg (:render/sprite2d scene)]
+    (into []
+      (mapcat (fn [[tx ty tr]]
+                (let [s (sx tx) t (sy ty) r (* tr k)]
+                  (if-not (and (> s -150) (< s (+ W 150)))
+                    []
+                    [{:pos [s (+ t (* r 0.7))] :size [(* r 0.8) (* r 0.25)] :rot 0.0 :shape 0 :color [0.0 0.0 0.0 0.18]}
+                     {:pos [s t] :size [r r] :rot 0.0 :shape 0 :color [0.133 0.290 0.165 1.0]}
+                     {:pos [(- s (* r 0.3)) (- t (* r 0.3))] :size [(* r 0.5) (* r 0.5)] :rot 0.0 :shape 0 :color [0.086 0.204 0.118 1.0]}])))
+              (layout/tree-scatter (get cfg :tree-spread 4200) (get cfg :tree-count 90))))))
+
 (defn frame-quads
   "The whole 2D frame as GPU data: {:sky {:zenith :ground} :quads [instances…]} — sky gradient params
-   plus every sprite/fx quad for one instanced draw. `tick` drives idle + :anim; `fx` is the juice."
-  [scene snap fx tick W H]
-  {:sky   (sky-params scene)
-   :quads (into (into [] (mapcat #(op->quads tick %) (layout/draw-list scene snap W H)))
-                (fx->quads [(/ W 2.0) (/ H 2.0)] fx))})
+   plus every quad for one instanced draw: trees + terrain + entity sprites (shaken world layer), then
+   the screen-space fx (sky + fx are NOT shaken). `tick` drives idle + :anim; `shake` is the slap kick."
+  ([scene snap fx tick W H] (frame-quads scene snap fx tick W H nil))
+  ([scene snap fx tick W H shake]
+   (let [[sx sy k] (layout/world->screen scene snap W H)
+         world (-> (tree-quads scene sx sy k W)
+                   (into (terrain-quads scene sx sy k))
+                   (into (mapcat #(op->quads tick %) (layout/draw-list scene snap W H))))
+         world (if-let [[dx dy] shake]
+                 (mapv (fn [q] (update q :pos (fn [[x y]] [(+ x dx) (+ y dy)]))) world)
+                 world)]
+     {:sky   (sky-params scene)
+      :quads (into world (fx->quads [(/ W 2.0) (/ H 2.0)] fx))})))
