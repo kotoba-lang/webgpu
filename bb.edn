@@ -42,9 +42,11 @@
                      (load-file "test/step_test.clj")
                      (load-file "test/html_test.clj")
                      (load-file "test/sql_test.clj")
+                     (load-file "test/ical_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
-                     (load-file "test/render_shader_test.clj"))}
+                     (load-file "test/render_shader_test.clj")
+                     (load-file "test/gpu_test.clj"))}
 
   gate   {:doc  "Real-binary gate: emit kami.* source and feed it to the actual vendor tool (openscad / spirv-as / ngspice). Missing tools skip; present tools must accept."
           :task (load-file "scripts/format_gate.clj")}
