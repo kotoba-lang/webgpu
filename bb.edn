@@ -45,6 +45,7 @@
                      (load-file "test/html_test.clj")
                      (load-file "test/sql_test.clj")
                      (load-file "test/ical_test.clj")
+                     (load-file "test/atom_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
                      (load-file "test/render_shader_test.clj")

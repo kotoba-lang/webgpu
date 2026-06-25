@@ -15,6 +15,7 @@
          '[kami.gltf :as gltf]
          '[kami.materialx :as mtlx]
          '[kami.graphml :as graphml]
+         '[kami.atom :as atom-feed]
          '[kami.mathml :as mathml]
          '[kami.musicxml :as musicxml]
          '[kami.ocio :as ocio]
@@ -273,6 +274,16 @@
                                             (musicxml/note :C 4 1 :quarter)
                                             (musicxml/rest* 2 :half))))
            (shell {:out :string :err :string} "xmllint" "--noout" (path "s.musicxml"))   ;; well-formedness
+           true)}
+
+   {:name "atom → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
+    :run (fn []
+           (spit (path "f.atom")
+                 (atom-feed/feed
+                   {:title "Blog" :id "urn:feed" :updated "2026-06-25T00:00:00Z" :link "https://x/" :author "Jun"}
+                   (atom-feed/entry {:title "First" :id "urn:1" :updated "2026-06-25T00:00:00Z"
+                                     :link "https://x/1" :summary "Hi"})))
+           (shell {:out :string :err :string} "xmllint" "--noout" (path "f.atom"))   ;; well-formedness
            true)}
 
    {:name "mathml → xmllint" :tool "xmllint" :hint "(ships with macOS / libxml2)"
