@@ -23,6 +23,18 @@
     (is (= (count (filter #(= "BEGIN:VEVENT" %) lines))
            (count (filter #(= "END:VEVENT" %) lines))) "balanced BEGIN/END")))
 
+(deftest line-folding
+  ;; RFC 5545 §3.1: content lines >75 octets must be folded (continuation lines begin with a space).
+  (let [long "This is a very long event description that comfortably exceeds the seventy-five octet limit mandated by RFC 5545 and must be folded onto continuation lines."
+        src  (ic/vcalendar {} (ic/vevent {:uid "1" :description long}))
+        ls   (str/split src #"\r\n")]
+    (is (every? #(<= (count %) 75) ls) "no content line exceeds 75 octets")
+    (is (some #(str/starts-with? % " ") ls) "a continuation line begins with a space")
+    (is (some #(= "UID:1" %) ls) "short lines are left unfolded")
+    ;; unfolding (remove every CRLF+space fold point) restores the original content line
+    (is (str/includes? (str/replace src #"\r\n " "") (str "DESCRIPTION:" long))
+        "unfolding recovers the description value")))
+
 (deftest component-builders
   (is (= ["BEGIN:VEVENT" "UID:a" "SUMMARY:Hi" "END:VEVENT"] (ic/vevent {:uid "a" :summary "Hi"})))
   (is (= ["BEGIN:VALARM" "ACTION:DISPLAY" "END:VALARM"] (ic/valarm {:action "DISPLAY"}))))

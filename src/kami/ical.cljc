@@ -20,6 +20,16 @@
 (defn- prop [k v]
   (str (str/upper-case (name k)) ":" (if (text-props k) (esc-text v) (str v))))
 
+(defn- fold
+  "RFC 5545 §3.1 line folding: a content line longer than 75 octets is split, continuation lines
+   beginning with a single space (≈75 chars; ASCII-octet approximation)."
+  [line]
+  (if (<= (count line) 75)
+    line
+    (apply str (subs line 0 75)
+           (for [i (range 75 (count line) 74)]
+             (str "\r\n " (subs line i (min (count line) (+ i 74))))))))
+
 (defn- lines
   "Flat line seq for a component: BEGIN, its properties, nested children (line seqs), END."
   [cname props children]
@@ -38,8 +48,9 @@
    default PRODID; components are line seqs from vevent/vtodo/…."
   [opts & components]
   (str/join "\r\n"
+            (map fold
             (lines :vcalendar
                    (into [[:version (or (:version opts) "2.0")]
                           [:prodid  (or (:prodid opts) "-//kami//kami.ical//EN")]]
                          (for [[k v] (dissoc opts :version :prodid)] [k v]))
-                   components)))
+                   components))))
