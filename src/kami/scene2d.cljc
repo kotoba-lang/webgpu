@@ -53,7 +53,7 @@
                   [])))
             fx)))
 
-(defn- abs [x] (if (neg? x) (- x) x))
+(defn- absf [x] (if (neg? x) (- x) x))
 
 (defn terrain-quads
   "The platformer :solids as quads — each solid an earth rect with a grass band on top, placed
@@ -64,8 +64,8 @@
               (let [x0 (nth s 0) x1 (nth s 1) yt (nth s 2) th (nth s 3 4000)
                     fill (nth s 4 [0.42 0.30 0.20]) top (nth s 5 [0.40 0.74 0.34])
                     L (sx x0) R (sx x1) T (sy yt) B (sy (- yt th))
-                    cx (/ (+ L R) 2.0) hw (/ (abs (- R L)) 2.0)]
-                [{:pos [cx (/ (+ T B) 2.0)] :size [hw (/ (abs (- B T)) 2.0)] :rot 0.0 :shape 1 :color (rgba fill)}
+                    cx (/ (+ L R) 2.0) hw (/ (absf (- R L)) 2.0)]
+                [{:pos [cx (/ (+ T B) 2.0)] :size [hw (/ (absf (- B T)) 2.0)] :rot 0.0 :shape 1 :color (rgba fill)}
                  {:pos [cx (+ T (* 7.0 k))]  :size [hw (* 13.0 k)]            :rot 0.0 :shape 1 :color (rgba top)}]))
             (get-in scene [:platformer :solids]))))
 
