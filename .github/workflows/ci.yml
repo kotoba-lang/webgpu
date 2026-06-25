@@ -1,0 +1,26 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  gates:
+    name: bb gates (EDN · shaders · GPU-IR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+      - name: Install babashka
+        uses: DeLaGuardo/setup-clojure@13.0
+        with: { bb: 'latest' }
+      - name: Cache cargo (for naga-cli)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo
+          key: cargo-naga-cli
+      - name: Install naga (wgpu's WGSL/GLSL frontend — shader validity gate)
+        run: cargo install naga-cli --quiet || echo "naga install skipped"
+      - name: bb test — all gates (domains/geometry/render-ir/wgsl/dsl/shader/gpu/sprite-gpu)
+        run: bb test
+      - name: GLSL backend — EDN → WGSL → GLSL ES 3.00 (web fallback shaders)
+        run: bb gen-glsl
