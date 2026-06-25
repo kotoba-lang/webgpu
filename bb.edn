@@ -4,7 +4,7 @@
 {:paths ["src" "test"]
  :tasks
  {
-  render-test {:doc "Headless-WebGL2 GPU-2D render: the sprite-SDF pass actually draws (pixel readback)." :task (do (load-file "scripts/gen_glsl.clj") (load-file "test/playwright_render_test.clj") (load-file "test/playwright_anim_test.clj"))}
+  render-test {:doc "Headless-WebGL2 GPU-2D render: the sprite-SDF pass actually draws (pixel readback)." :task (do (load-file "scripts/gen_glsl.clj") (load-file "test/playwright_render_test.clj") (load-file "test/playwright_anim_test.clj") (load-file "test/playwright_sky_text_test.clj"))}
   webgl-test {:doc "Headless-WebGL2 (playwright-clj) test: the EDN-generated GLSL links in a real browser." :task (do (load-file "scripts/gen_glsl.clj") (load-file "test/playwright_webgl_test.clj"))}
   gen-glsl {:doc "kami.wgsl EDN → WGSL → naga → GLSL ES 3.00 (WebGL2) for the web shaders." :task (load-file "scripts/gen_glsl.clj")}
   gen-wgsl    {:doc "Write fixtures/lit-shader.wgsl from kami.shaders + report native parity." :task (load-file "scripts/gen_wgsl.clj")}

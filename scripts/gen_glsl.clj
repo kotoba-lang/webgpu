@@ -11,6 +11,7 @@
 ;;   bb gen-glsl          # write fixtures/glsl/<name>.<stage>.glsl + report
 (require '[kami.shaders :as sh]
          '[kami.sprite-gpu :as sg]
+         '[kami.sky :as sky]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.process :as p])
@@ -19,7 +20,8 @@
 (def shaders
   [{:name "lit"    :wgsl (sh/lit-shader)        :entries [["vs" "vert"] ["fs" "frag"]]}
    {:name "shadow" :wgsl (sh/shadow-shader)     :entries [["vs" "vert"]]}
-   {:name "sprite" :wgsl (sg/sprite-sdf-shader) :entries [["vs" "vert"] ["fs" "frag"]]}])
+   {:name "sprite" :wgsl (sg/sprite-sdf-shader) :entries [["vs" "vert"] ["fs" "frag"]]}
+               {:name "sky" :wgsl (sky/gradient-shader) :entries [["vs" "vert"] ["fs" "frag"]]}])
 
 (io/make-parents (io/file "fixtures/glsl/.keep"))
 (println "── kami.wgsl EDN → WGSL → naga → GLSL ES 3.00 (WebGL2) ──")
