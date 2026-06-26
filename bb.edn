@@ -50,7 +50,7 @@
                      (load-file "test/atom_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
-                     (load-file "test/render_shader_test.clj") (load-file "test/pipelines_test.clj") (load-file "test/pipeline_specs_test.clj")
+                     (load-file "test/render_shader_test.clj") (load-file "test/render_naga_test.clj") (load-file "test/pipelines_test.clj") (load-file "test/pipeline_specs_test.clj")
                      (load-file "test/gpu_test.clj")
                      (load-file "test/sprite_gpu_test.clj"))}
 
