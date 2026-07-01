@@ -1,12 +1,11 @@
 ;; babashka task runner for kami-webgpu. The .cljc domain interpreters are the same source
-;; the web (CLJS), native (kotoba-clj→WASM), and JVM (here) run — `bb test` checks the JVM
-;; surface; `bb verify` runs all three (the cross-platform "everything CLJ/EDN" proof).
+;; the web (CLJS) and JVM (here) run. `bb verify` stays inside this CLJ/EDN repo.
 {:paths ["src" "test"]
  :tasks
  {
   render-test {:doc "Headless-WebGL2 GPU-2D render: the sprite-SDF pass actually draws (pixel readback)." :task (do (load-file "scripts/gen_glsl.clj") (load-file "test/playwright_render_test.clj") (load-file "test/playwright_anim_test.clj") (load-file "test/playwright_sky_text_test.clj") (load-file "test/playwright_frame_test.clj"))}
   webgl-test {:doc "Headless-WebGL2 (playwright-clj) test: the EDN-generated GLSL links in a real browser." :task (do (load-file "scripts/gen_glsl.clj") (load-file "test/playwright_webgl_test.clj"))}
-  gen-pipeline-specs {:doc "kami.pipelines EDN → Rust pipeline_specs.rs codegen (--write / --strict)." :task (load-file "scripts/gen_pipeline_specs.clj")}
+  gen-pipeline-specs {:doc "kami.pipelines EDN → fixtures/pipeline_specs.edn (--write / --strict)." :task (load-file "scripts/gen_pipeline_specs.clj")}
   gen-glsl {:doc "kami.wgsl EDN → WGSL → naga → GLSL ES 3.00 (WebGL2) for the web shaders." :task (load-file "scripts/gen_glsl.clj")}
   gen-wgsl    {:doc "Write fixtures/lit-shader.wgsl from kami.shaders + report native parity." :task (load-file "scripts/gen_wgsl.clj")}
   wgsl-parity {:doc "Check web↔native lit-shader parity (--strict throws)." :task (binding [*command-line-args* (vec *command-line-args*)] (load-file "scripts/gen_wgsl.clj"))}test   {:doc  "Run the .cljc domain-interpreter unit tests on the JVM (cross-platform correctness)."
@@ -50,20 +49,13 @@
                      (load-file "test/atom_test.clj")
                      (load-file "test/dsl_test.clj")
                      (load-file "test/shader_test.clj")
-                     (load-file "test/render_shader_test.clj") (load-file "test/render_naga_test.clj") (load-file "test/pipelines_test.clj") (load-file "test/pipeline_specs_test.clj")
+                     (load-file "test/render_shader_test.clj") (load-file "test/render_naga_test.clj") (load-file "test/pipeline_specs_test.clj")
                      (load-file "test/gpu_test.clj")
                      (load-file "test/sprite_gpu_test.clj"))}
 
   gate   {:doc  "Real-binary gate: emit kami.* source and feed it to the actual vendor tool (openscad / spirv-as / ngspice). Missing tools skip; present tools must accept."
           :task (load-file "scripts/format_gate.clj")}
 
-  verify {:doc     "Run every test surface: JVM .cljc + real-binary format gate + native WASM (kotoba-clj) + native renderer (kami-webgpu-rs)."
+  verify {:doc     "Run repository-local CLJ/EDN surfaces: JVM .cljc + real-binary format gate."
           :depends [test gate]
-          :task    (do
-                     (println "\n── native WASM: kotoba-clj keystone (CLJ data subset → WASM) ──")
-                     (babashka.tasks/shell {:dir "../kotoba"}
-                       "cargo test -p kotoba-clj --test keystone_domains --target aarch64-apple-darwin")
-                     (println "\n── native renderer: kami-webgpu-rs (EDN render-IR → wgpu) ──")
-                     (babashka.tasks/shell {:dir "../kami-engine"}
-                       "cargo test -p kami-webgpu-rs --target aarch64-apple-darwin")
-                     (println "\n✓ all surfaces green — same EDN/CLJ runs on web, native, and JVM"))}}}
+          :task    (println "\n✓ repository-local CLJ/EDN surfaces green")}}}

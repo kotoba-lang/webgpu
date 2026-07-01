@@ -54,7 +54,7 @@
            (shell {:out :string :err :string} "openscad" "-o" (path "part.csg") (path "part.scad"))
            true)}
 
-   {:name "wgsl → naga" :tool "naga" :hint "cargo install naga-cli"
+   {:name "wgsl → naga" :tool "naga" :hint "install naga-cli if available"
     :run (fn []
            (spit (path "shader.wgsl")
                  (wgsl/shader

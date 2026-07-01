@@ -27,9 +27,9 @@ No Rust, no wasm, no per-frame string marshaling — you hand it data, it draws.
 
 The render-IR is **data, not code** — exactly like hiccup's `[:div …]`. That makes it:
 
-- **cross-platform** — the same EDN is read by Clojure, ClojureScript, Rust (`edn`),
-  and JS. One description; the web executes it via CLJS→WebGPU, a native host via
-  Rust→wgpu.
+- **cross-platform** — the same EDN is read by Clojure, ClojureScript, and JS.
+  One description; the web executes it via CLJS→WebGPU, and native adapters can
+  consume the EDN contract from their own repositories.
 - **Datomic-native** — store the render graph as datoms; `as-of`, query, and fork
   all work on data.
 - **serializable / forkable** — save, send, clone a scene with no eval.
@@ -86,5 +86,5 @@ In network-isekai a game authors the same data in `scene.edn` as `:render/lighti
 
 Renders instanced, lit cuboids with a follow/overview camera (proven live in Chrome
 via WebGPU). Shadow-mapped, PBR, with the **lighting model, sun frustum, camera, and
-geometry library all data-driven** (see "Authoring the look"). Roadmap: EDN-authored
-post-FX passes / pipelines / WGSL, and a native Rust executor over the same EDN.
+geometry library all data-driven** (see "Authoring the look"). Roadmap:
+EDN-authored post-FX passes, pipelines, and WGSL.

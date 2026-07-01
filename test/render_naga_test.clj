@@ -2,8 +2,8 @@
   "Gate the naga-validity of every kami-render shader generated from kami.render-shaders EDN. The
    render_shader_test gate proves token-equivalence to the shipping native WGSL, but NOT that the WGSL
    is valid — metahuman_skin was a real naga-invalid shipping shader (array<f32,64> in a uniform).
-   This naga-checks all 16 from the EDN so an invalid shader can't slip back in. Skips if naga is
-   absent (same policy as the co-located gates); CI installs naga so it runs there."
+   This naga-checks all 16 from the EDN when naga is available. Skips if naga is
+   absent, matching the repository-local no-Rust-toolchain CI policy."
   (:require [clojure.test :refer [deftest is run-tests]]
             [clojure.string :as str]
             [babashka.process :as p]

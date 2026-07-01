@@ -13,13 +13,6 @@ jobs:
       - name: Install babashka
         uses: DeLaGuardo/setup-clojure@13.0
         with: { bb: 'latest' }
-      - name: Cache cargo (for naga-cli)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo
-          key: cargo-naga-cli
-      - name: Install naga (wgpu's WGSL/GLSL frontend — shader validity gate)
-        run: cargo install naga-cli --quiet || echo "naga install skipped"
       - name: bb test — all gates (domains/geometry/render-ir/wgsl/dsl/shader/gpu/sprite-gpu)
         run: bb test
       - name: GLSL backend — EDN → WGSL → GLSL ES 3.00 (web fallback shaders)

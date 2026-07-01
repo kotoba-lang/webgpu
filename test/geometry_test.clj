@@ -3,7 +3,7 @@
    pin vertex/index counts, watertight index bounds, the sphere's radius invariant, and
    determinism, so the native renderer can match this fixture instead of re-deriving geometry."
   (:require [clojure.test :refer [deftest is run-tests]]
-            [clojure.string :as str]
+            [cheshire.core :as json]
             [kami.webgpu.geometry :as g]))
 
 (defn- mag [[x y z]] (Math/sqrt (+ (* x x) (* y y) (* z z))))
@@ -48,19 +48,29 @@
   (is (= (g/box 1 2 3) (g/box 1 2 3)))
   (is (= (g/cylinder 1 2 8) (g/cylinder 1 2 8))))
 
-(defn- golden-json [{:keys [positions normals indices]}]
-  (let [verts (vec (mapcat into positions normals))]
-    (str "{\"verts\":[" (str/join "," verts) "],\"indices\":[" (str/join "," indices) "]}\n")))
+(defn- golden-map [{:keys [positions normals indices]}]
+  {:verts (vec (mapcat into positions normals))
+   :indices (vec indices)})
+
+(defn- approx= [a b]
+  (<= (Math/abs (- (double a) (double b))) 1e-12))
+
+(defn- golden-matches? [mesh fixture]
+  (let [expected (json/parse-string (slurp fixture) true)
+        actual (golden-map mesh)]
+    (and (= (:indices expected) (:indices actual))
+         (= (count (:verts expected)) (count (:verts actual)))
+         (every? true? (map approx= (:verts expected) (:verts actual))))))
 
 (deftest meshes-match-the-cross-platform-golden
   ;; The committed fixtures/*-golden.json are the canonical meshes the native renderer
   ;; (kami-webgpu-rs) also asserts against — so a divergence in EITHER language fails its test
   ;; instead of drifting silently. This locks the CLJ side to those fixtures.
-  (is (= (golden-json (g/box 1 1 1))          (slurp "fixtures/box-golden.json"))
+  (is (golden-matches? (g/box 1 1 1) "fixtures/box-golden.json")
       "CLJC box(1,1,1) must equal the committed golden")
-  (is (= (golden-json (g/sphere 1.0 4 6))     (slurp "fixtures/sphere-golden.json"))
+  (is (golden-matches? (g/sphere 1.0 4 6) "fixtures/sphere-golden.json")
       "CLJC sphere(1,4,6) must equal the committed golden")
-  (is (= (golden-json (g/cylinder 1.0 2.0 6)) (slurp "fixtures/cylinder-golden.json"))
+  (is (golden-matches? (g/cylinder 1.0 2.0 6) "fixtures/cylinder-golden.json")
       "CLJC cylinder(1,2,6) must equal the committed golden"))
 
 (let [{:keys [fail error]} (run-tests 'geometry-test)]

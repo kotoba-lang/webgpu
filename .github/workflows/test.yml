@@ -1,8 +1,7 @@
 name: test
 
 # The .cljc domain interpreters (fsm / physics / netsync / level / webgpu.ir) are the same
-# source the web (CLJS) and native (kotoba-clj→WASM) run. This gate checks the JVM surface
-# on every push — a fast, GPU-free proof that the cross-platform interpreters stay correct.
+# source the web (CLJS) and JVM run. This gate checks the JVM surface on every push.
 on:
   push:
   pull_request:

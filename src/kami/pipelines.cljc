@@ -1,10 +1,10 @@
 (ns kami.pipelines
-  "Render pipelines as data — the native open-world pipelines (kami-render/scene_pipelines.rs) as one
-   shared EDN table, the same way the web side describes its frame in kami.webgpu/default-graph. Today
-   the native pipelines are ~500 LOC of hand-written wgpu::RenderPipelineDescriptor boilerplate that
-   varies in only a few fields; this table is the single source for those fields and a parity gate
-   (test/pipelines_test) holds scene_pipelines.rs to it, so native + EDN can't silently diverge. The
-   next step (Tier B) is generating the Rust from this table; the gate makes that safe. `.cljc`.
+  "Render pipelines as data.
+
+   native-pipelines is the shared EDN table for open-world pipeline fields, the
+   same way the web side describes its frame in kami.webgpu/default-graph.
+   Repository-local gates keep the committed EDN fixture in sync with this
+   source. Native adapters can consume this table from their own repositories.
 
    Fields per pipeline: :shader (the scene_*.wgsl), :cull (:back/:front/:none), :depth-write (bool),
    :depth-compare (:less/:less-equal/…), :blend (:none/:alpha). Vertex layouts are the remaining
@@ -12,7 +12,7 @@
   (:require [clojure.string :as str]))
 
 (def native-pipelines
-  "The 8 open-world render pipelines as data — mirror of scene_pipelines.rs's varying fields."
+  "The 8 open-world render pipelines as data."
   {:terrain    {:shader "scene_terrain"    :cull :back :depth-write true  :depth-compare :less       :blend :none}
    :sky        {:shader "scene_sky"        :cull :none :depth-write false :depth-compare :less-equal :blend :none}
    :vegetation {:shader "scene_vegetation" :cull :none :depth-write true  :depth-compare :less       :blend :alpha}
