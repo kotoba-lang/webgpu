@@ -1,5 +1,11 @@
 # kami-webgpu
 
+> 2026-07-02: [kotoba-lang/webgpu-rs](https://github.com/kotoba-lang/webgpu-rs)
+> はこのリポジトリに統合された（owner 指示）。`kotoba.webgpu-rs.*` — CPU 側
+> EDN render-IR ドメインロジック（render-IR parsing / scene.edn bridge /
+> deterministic procedural demo scene / mat4 / rng / geometry）— は
+> `src/kotoba/webgpu_rs*` に namespace そのままで住む。旧リポは archive。
+
 **Declarative WebGPU from EDN — hiccup for the GPU.**
 
 ClojureScript drives the browser WebGPU API directly from a plain EDN render-IR.
