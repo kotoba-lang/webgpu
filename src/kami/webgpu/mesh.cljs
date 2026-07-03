@@ -44,7 +44,23 @@
    introduced here). `preview-demo.html` (kami-app-character-creator) instead
    drives this shader's skinning path with a small synthetic 2-bone bending
    quad-strip fixture, and its morph path with the real character-creator head
-   mesh — see that file's comments."
+   mesh — see that file's comments.
+
+   Added later (/loop maturity pass, ADR-2607031200): procedural, computed-
+   in-shader PATTERNS as a second, backward-compatible draw-call option
+   alongside the original flat `color`. This is explicitly NOT a texture/UV-
+   decal system — no image loading, no sampler, no UV vertex attribute (an
+   actual bitmap-texture pipeline is a separate, much larger effort). It's a
+   `color_b` + `pattern_kind` + `pattern_params` uniform, evaluated per-
+   fragment from each vertex's un-morphed, un-skinned LOCAL position
+   (`VertexOut.local_pos`, carried through unchanged from the vertex shader's
+   `position` input) — local space so a pattern (e.g. a scar's edge fade)
+   stays anchored to the mesh's own geometry regardless of pose/animation,
+   not the world-space result of skinning. `pattern_kind` 0 (the default,
+   byte-for-byte what every pre-existing call site already produces since
+   the new uniform fields default to zero) reproduces the exact old flat-
+   color behaviour — `t` is always `0.0`, so `mix(color, color_b, 0.0) =
+   color`."
   (:require [clojure.string :as str]))
 
 ;; --- minimal camera math (duplicated, not shared, from kami.webgpu — kept
@@ -100,10 +116,12 @@
   "struct Uniforms {
   mvp: mat4x4<f32>,
   color: vec4<f32>,
+  color_b: vec4<f32>,
   vertex_count: u32,
   morph_count: u32,
   joint_count: u32,
-  _pad: u32,
+  pattern_kind: u32,
+  pattern_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -114,6 +132,7 @@
 struct VertexOut {
   @builtin(position) clip: vec4<f32>,
   @location(0) n: vec3<f32>,
+  @location(1) local_pos: vec3<f32>,
 };
 
 @vertex
@@ -145,7 +164,32 @@ fn vs(
   var out: VertexOut;
   out.clip = u.mvp * world;
   out.n = normal;
+  out.local_pos = position;
   return out;
+}
+
+// pattern_kind: 0 = flat (color only, color_b unused — the pre-existing
+// behaviour, byte-identical). 1 = linear gradient (color->color_b along
+// pattern_params.xyz, a local-space axis; .w is the half-range that maps to
+// t=0..1). 2 = radial gradient (color at pattern_params.xyz, a local-space
+// center point, fading to color_b at pattern_params.w, the radius — the
+// scar/tattoo edge-fade case). 3 = stripes (hard color/color_b bands along
+// pattern_params.xyz at frequency pattern_params.w).
+fn pattern_t(local_pos: vec3<f32>) -> f32 {
+  if (u.pattern_kind == 1u) {
+    let axis = normalize(u.pattern_params.xyz);
+    let range = max(u.pattern_params.w, 1e-4);
+    return clamp(dot(local_pos, axis) / range * 0.5 + 0.5, 0.0, 1.0);
+  } else if (u.pattern_kind == 2u) {
+    let center = u.pattern_params.xyz;
+    let radius = max(u.pattern_params.w, 1e-4);
+    return clamp(length(local_pos - center) / radius, 0.0, 1.0);
+  } else if (u.pattern_kind == 3u) {
+    let axis = normalize(u.pattern_params.xyz);
+    let freq = u.pattern_params.w;
+    return step(0.0, sin(dot(local_pos, axis) * freq));
+  }
+  return 0.0;
 }
 
 @fragment
@@ -154,7 +198,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   let ndl = max(dot(normalize(in.n), light_dir), 0.0);
   let ambient = 0.35;
   let lit = ambient + ndl * (1.0 - ambient);
-  return vec4<f32>(u.color.rgb * lit, 1.0);
+  let t = pattern_t(in.local_pos);
+  let base_color = mix(u.color.rgb, u.color_b.rgb, t);
+  return vec4<f32>(base_color * lit, 1.0);
 }
 ")
 
@@ -221,7 +267,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
           joint-count (if has-skin? (inc (apply max 0 (mapcat identity joints))) 0)
           joint-matrices-buf (.createBuffer device #js {:size (max 64 (* 64 (max 1 joint-count)))
                                                          :usage (bit-or (.-STORAGE U) (.-COPY_DST U))})
-          gbuf (.createBuffer device #js {:size 96 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})]
+          ;; 128 bytes: mvp(64) + color(16) + color_b(16) + 4x u32 counts/
+          ;; pattern_kind(16) + pattern_params(16) — see `draw!`'s `gdata`.
+          gbuf (.createBuffer device #js {:size 128 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})]
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
        :joint-count joint-count :joint-matrices-buf joint-matrices-buf
@@ -233,18 +281,29 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   pipeline/bind-group/buffers and issues the indexed draw). `mvp`: Float32Array
   (16, column-major). `color`: `[r g b]`. `morph-weights`: seq of f32, length
   `:morph-count` (ignored if 0). `joint-matrices`: seq of 16-float column-major
-  mat4s, length `:joint-count` (ignored if 0)."
-  [{:keys [device pipe]} pass
-   {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
-           joint-count joint-matrices-buf gbuf]}
-   mvp color morph-weights joint-matrices]
-  (let [q (.-queue device)
-        gdata (js/Float32Array. 24)] ;; mvp(16) + color(4) + counts(4, as u32 view below)
-    (.set gdata mvp 0)
-    (.set gdata (f32 (conj (vec color) 1.0)) 16)
-    (let [gview (js/Uint32Array. (.-buffer gdata))]
-      (aset gview 20 vertex-count) (aset gview 21 morph-count) (aset gview 22 joint-count))
-    (.writeBuffer q gbuf 0 gdata)
+  mat4s, length `:joint-count` (ignored if 0).
+
+  Optional trailing `pattern` map — `{:color-b [r g b] :kind 0|1|2|3
+  :params [x y z w]}` — selects a procedural fragment pattern (see the
+  shader's own `pattern_t` doc comment for what each `:kind` means).
+  Omitting it (every pre-`/loop`-maturity-pass call site) draws exactly as
+  before: `:kind` defaults to `0` (flat `color`, `color_b`/`params` unused)."
+  ([ctx pass buffers mvp color morph-weights joint-matrices]
+   (draw! ctx pass buffers mvp color morph-weights joint-matrices nil))
+  ([{:keys [device pipe]} pass
+    {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
+            joint-count joint-matrices-buf gbuf]}
+    mvp color morph-weights joint-matrices
+    {:keys [color-b kind params] :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]}}]
+   (let [q (.-queue device)
+         gdata (js/Float32Array. 32)] ;; mvp(16) + color(4) + color_b(4) + counts+kind(4, u32 view) + params(4)
+     (.set gdata mvp 0)
+     (.set gdata (f32 (conj (vec color) 1.0)) 16)
+     (.set gdata (f32 (conj (vec color-b) 1.0)) 20)
+     (let [gview (js/Uint32Array. (.-buffer gdata))]
+       (aset gview 24 vertex-count) (aset gview 25 morph-count) (aset gview 26 joint-count) (aset gview 27 kind))
+     (.set gdata (f32 params) 28)
+     (.writeBuffer q gbuf 0 gdata)
     (when (pos? morph-count)
       (.writeBuffer q morph-weights-buf 0 (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
     (when (pos? joint-count)
@@ -259,4 +318,4 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
       (.setBindGroup pass 0 bind)
       (.setVertexBuffer pass 0 vbuf)
       (.setIndexBuffer pass ibuf "uint32")
-      (.drawIndexed pass idx-count))))
+      (.drawIndexed pass idx-count)))))
