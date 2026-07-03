@@ -60,7 +60,38 @@
    byte-for-byte what every pre-existing call site already produces since
    the new uniform fields default to zero) reproduces the exact old flat-
    color behaviour — `t` is always `0.0`, so `mix(color, color_b, 0.0) =
-   color`."
+   color`.
+
+   Added later still (/loop maturity pass, real-VRM-base spike follow-up):
+   an actual bitmap-TEXTURE path + basic 2-tone TOON shading, closing the
+   'no texture pipeline' gap the pattern work above explicitly deferred.
+   Real VRM/VRoid faces are painted via a baseColorTexture, not vertex
+   colour — a real production VRM (Seed-san.vrm, tested locally, never
+   committed — see `character-creator.gpu-adapter/mesh-base-color-texture`
+   + `vrm.convert/read-base-color-texture` for the loader side) rendered
+   through the pre-texture version of this shader had a blank face.
+
+   Texture: a UV vertex attribute (`TEXCOORD_0` convention) + one
+   `texture_2d<f32>`/`sampler` pair per draw call, sampled and multiplied
+   into the pattern-resolved base colour. Backward compatibility trick: the
+   shader ALWAYS samples the texture (no `has_texture` branch) — every
+   pre-existing/untextured call binds a shared 1x1 opaque-white texture
+   (`init!`'s `:default-texture`), so `textureSample(...).rgb = (1,1,1)`
+   and `base_color * (1,1,1) = base_color`, exactly the old output. UVs
+   default to `(0,0)` when a mesh has none (same default-texture makes the
+   sample value irrelevant either way).
+
+   Toon shading: `shade_kind` 0 (default) is the original continuous
+   `ambient + ndl*(1-ambient)` lighting, byte-identical to every
+   pre-existing call. `shade_kind` 1 is a 2-tone step (`toon_threshold` +
+   `toon_smooth` transition band) between a fixed dim/lit factor — the
+   anime-style hard light/shadow boundary. This is deliberately NOT full
+   MToon (no rim light, no matcap, no outline pass, no per-material shade
+   COLOR — just a brightness step; a real shade-colour uniform would grow
+   this struct further and isn't needed to prove the texture pipeline
+   works). Texture loading itself is async (`createImageBitmap`) —
+   `upload-texture!` returns a Promise of a GPUTexture; callers `.then`
+   before passing it to `draw!`."
   (:require [clojure.string :as str]))
 
 ;; --- minimal camera math (duplicated, not shared, from kami.webgpu — kept
@@ -122,25 +153,33 @@
   joint_count: u32,
   pattern_kind: u32,
   pattern_params: vec4<f32>,
+  shade_kind: u32,
+  toon_threshold: f32,
+  toon_smooth: f32,
+  _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> morph_deltas: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read> morph_weights: array<f32>;
 @group(0) @binding(3) var<storage, read> joint_matrices: array<mat4x4<f32>>;
+@group(0) @binding(4) var tex: texture_2d<f32>;
+@group(0) @binding(5) var samp: sampler;
 
 struct VertexOut {
   @builtin(position) clip: vec4<f32>,
   @location(0) n: vec3<f32>,
   @location(1) local_pos: vec3<f32>,
+  @location(2) uv: vec2<f32>,
 };
 
 @vertex
 fn vs(
   @location(0) position: vec3<f32>,
   @location(1) normal: vec3<f32>,
-  @location(2) joints: vec4<u32>,
-  @location(3) weights: vec4<f32>,
+  @location(2) uv_in: vec2<f32>,
+  @location(3) joints: vec4<u32>,
+  @location(4) weights: vec4<f32>,
   @builtin(vertex_index) vidx: u32
 ) -> VertexOut {
   var pos = position;
@@ -165,6 +204,7 @@ fn vs(
   out.clip = u.mvp * world;
   out.n = normal;
   out.local_pos = position;
+  out.uv = uv_in;
   return out;
 }
 
@@ -192,25 +232,57 @@ fn pattern_t(local_pos: vec3<f32>) -> f32 {
   return 0.0;
 }
 
+// shade_kind: 0 = continuous N.L lighting (pre-existing, byte-identical).
+// 1 = 2-tone toon step — a smoothstep transition band (width toon_smooth)
+// centred on toon_threshold, between a fixed dim factor and full lit. Not
+// full MToon (no shade COLOR, no rim/matcap/outline) — a brightness step
+// only, sufficient to prove the texture path and show a visibly harder
+// light/shadow boundary than the continuous mode.
+fn toon_lit(ndl: f32) -> f32 {
+  if (u.shade_kind == 1u) {
+    let smooth_w = max(u.toon_smooth, 1e-4);
+    let edge = smoothstep(u.toon_threshold - smooth_w, u.toon_threshold + smooth_w, ndl);
+    return mix(0.35, 1.0, edge);
+  }
+  let ambient = 0.35;
+  return ambient + ndl * (1.0 - ambient);
+}
+
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   let light_dir = normalize(vec3<f32>(0.4, 0.8, 0.5));
   let ndl = max(dot(normalize(in.n), light_dir), 0.0);
-  let ambient = 0.35;
-  let lit = ambient + ndl * (1.0 - ambient);
+  let lit = toon_lit(ndl);
   let t = pattern_t(in.local_pos);
   let base_color = mix(u.color.rgb, u.color_b.rgb, t);
-  return vec4<f32>(base_color * lit, 1.0);
+  let tex_sample = textureSample(tex, samp, in.uv);
+  return vec4<f32>(base_color * tex_sample.rgb * lit, 1.0);
 }
 ")
 
-(def ^:private VERTEX-STRIDE 56) ;; pos(12) + normal(12) + joints(16, uint32x4) + weights(16)
+(def ^:private VERTEX-STRIDE 64) ;; pos(12) + normal(12) + uv(8) + joints(16, uint32x4) + weights(16)
+
+(defn- default-texture!
+  "1x1 opaque-white texture — the shared fallback every untextured `draw!`
+  call binds, so the shader's unconditional `textureSample` is a no-op
+  (`base_color * (1,1,1) = base_color`), achieving backward compatibility
+  without a `has_texture` branch in WGSL."
+  [device]
+  (let [U js/GPUTextureUsage
+        tex (.createTexture device #js {:size #js {:width 1 :height 1}
+                                         :format "rgba8unorm"
+                                         :usage (bit-or (.-TEXTURE_BINDING U) (.-COPY_DST U))})]
+    (.writeTexture (.-queue device) #js {:texture tex} (js/Uint8Array. #js [255 255 255 255])
+                   #js {:bytesPerRow 4} #js {:width 1 :height 1})
+    tex))
 
 (defn init!
   "Build the skin/morph mesh pipeline once (canvas already configured for
   WebGPU by the caller — reuses the same `device`/`ctx`/`fmt` a `kami.webgpu/
   init!` context already produced, so both executors can draw into the same
-  canvas/frame if desired). Returns the pipeline context."
+  canvas/frame if desired). Returns the pipeline context (now also carrying
+  `:default-texture`/`:default-sampler`, the backward-compat fallback every
+  `draw!` call without its own real texture binds)."
   [device fmt]
   (let [mod (.createShaderModule device #js {:code SHADER})
         pipe (.createRenderPipeline device
@@ -220,38 +292,64 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                                                      :attributes
                                                      #js [#js {:format "float32x3" :offset 0 :shaderLocation 0}
                                                           #js {:format "float32x3" :offset 12 :shaderLocation 1}
-                                                          #js {:format "uint32x4" :offset 24 :shaderLocation 2}
-                                                          #js {:format "float32x4" :offset 40 :shaderLocation 3}]}]}
+                                                          #js {:format "float32x2" :offset 24 :shaderLocation 2}
+                                                          #js {:format "uint32x4" :offset 32 :shaderLocation 3}
+                                                          #js {:format "float32x4" :offset 48 :shaderLocation 4}]}]}
                     :fragment #js {:module mod :entryPoint "fs" :targets #js [#js {:format fmt}]}
                     :primitive #js {:cullMode "none"}
                     :depthStencil #js {:format "depth24plus" :depthWriteEnabled true :depthCompare "less"}})]
-    {:device device :pipe pipe}))
+    {:device device :pipe pipe
+     :default-texture (default-texture! device)
+     :default-sampler (.createSampler device #js {:magFilter "linear" :minFilter "linear"})}))
+
+(defn upload-texture!
+  "Decode `{:bytes :mime-type}` (`vrm.convert/read-base-color-texture`'s
+  output shape) into a real `GPUTexture`. Async (image decode via
+  `createImageBitmap`) — returns a `Promise` resolving to the texture;
+  callers `.then` before passing it to `draw!`'s `:texture`."
+  [{:keys [device]} {:keys [bytes mime-type]}]
+  (-> (js/createImageBitmap (js/Blob. #js [(js/Uint8Array. (clj->js (vec bytes)))] #js {:type mime-type}))
+      (.then (fn [bitmap]
+               (let [w (.-width bitmap) h (.-height bitmap)
+                     U js/GPUTextureUsage
+                     tex (.createTexture device #js {:size #js {:width w :height h}
+                                                      :format "rgba8unorm"
+                                                      :usage (bit-or (.-TEXTURE_BINDING U) (.-COPY_DST U)
+                                                                     (.-RENDER_ATTACHMENT U))})]
+                 (.copyExternalImageToTexture (.-queue device)
+                   #js {:source bitmap} #js {:texture tex} #js {:width w :height h})
+                 tex)))))
 
 (defn- f32 [xs] (js/Float32Array. (clj->js (vec xs))))
 
 (defn upload-mesh!
-  "`{:positions :normals :indices :morph-target-deltas :joints :weights}` (all
-  optional except `:positions`/`:normals`/`:indices`; `:joints`/`:weights` are
-  per-vertex `[j0 j1 j2 j3]`/`[w0 w1 w2 w3]`, omit both for an unskinned mesh;
+  "`{:positions :normals :indices :uvs :morph-target-deltas :joints :weights}`
+  (all optional except `:positions`/`:normals`/`:indices`; `:uvs` is a
+  per-vertex `[u v]`, defaults to `[0 0]` when omitted — irrelevant either
+  way against the default white texture; `:joints`/`:weights` are per-vertex
+  `[j0 j1 j2 j3]`/`[w0 w1 w2 w3]`, omit both for an unskinned mesh;
   `:morph-target-deltas` is `[[[dx dy dz] ...] ...]`, one seq of per-vertex
   deltas per target, omit for no morphs) -> GPU buffer handles + counts.
   Storage buffers are always allocated (min size, if the mesh has none) since
   WebGPU rejects zero-byte buffers."
-  [{:keys [device]} {:keys [positions normals indices morph-target-deltas joints weights]}]
+  [{:keys [device]} {:keys [positions normals indices uvs morph-target-deltas joints weights]}]
   (let [U js/GPUBufferUsage
         vcount (count positions)
         has-skin? (and (seq joints) (seq weights))
+        has-uv? (seq uvs)
         interleaved (js/Float32Array. (* vcount (/ VERTEX-STRIDE 4)))
         joints-view (js/Uint32Array. (.-buffer interleaved))]
     (dotimes [i vcount]
-      (let [base (* i 14) ;; 14 = 56 bytes / 4
+      (let [base (* i 16) ;; 16 = 64 bytes / 4
             p (nth positions i) n (nth normals i)
+            uv (if has-uv? (nth uvs i) [0.0 0.0])
             j (if has-skin? (nth joints i) [0 0 0 0])
             w (if has-skin? (nth weights i) [1.0 0.0 0.0 0.0])]
         (.set interleaved (f32 p) base)
         (.set interleaved (f32 n) (+ base 3))
-        (.set joints-view (js/Uint32Array. (clj->js (vec j))) (+ base 6))
-        (.set interleaved (f32 w) (+ base 10))))
+        (.set interleaved (f32 uv) (+ base 6))
+        (.set joints-view (js/Uint32Array. (clj->js (vec j))) (+ base 8))
+        (.set interleaved (f32 w) (+ base 12))))
     (let [mkbuf (fn [data usage]
                   (let [b (.createBuffer device #js {:size (.-byteLength data) :usage (bit-or usage (.-COPY_DST U))})]
                     (.writeBuffer (.-queue device) b 0 data) b))
@@ -267,9 +365,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
           joint-count (if has-skin? (inc (apply max 0 (mapcat identity joints))) 0)
           joint-matrices-buf (.createBuffer device #js {:size (max 64 (* 64 (max 1 joint-count)))
                                                          :usage (bit-or (.-STORAGE U) (.-COPY_DST U))})
-          ;; 128 bytes: mvp(64) + color(16) + color_b(16) + 4x u32 counts/
-          ;; pattern_kind(16) + pattern_params(16) — see `draw!`'s `gdata`.
-          gbuf (.createBuffer device #js {:size 128 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})]
+          ;; 144 bytes: mvp(64) + color(16) + color_b(16) + 4x u32 counts/
+          ;; pattern_kind(16) + pattern_params(16) + shade_kind/toon_threshold/
+          ;; toon_smooth/_pad2(16) — see `draw!`'s `gdata`.
+          gbuf (.createBuffer device #js {:size 144 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})]
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
        :joint-count joint-count :joint-matrices-buf joint-matrices-buf
@@ -283,26 +382,43 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   `:morph-count` (ignored if 0). `joint-matrices`: seq of 16-float column-major
   mat4s, length `:joint-count` (ignored if 0).
 
-  Optional trailing `pattern` map — `{:color-b [r g b] :kind 0|1|2|3
-  :params [x y z w]}` — selects a procedural fragment pattern (see the
-  shader's own `pattern_t` doc comment for what each `:kind` means).
-  Omitting it (every pre-`/loop`-maturity-pass call site) draws exactly as
-  before: `:kind` defaults to `0` (flat `color`, `color_b`/`params` unused)."
+  Optional trailing `opts` map:
+  - `:color-b`/`:kind` (0|1|2|3)/`:params` `[x y z w]` — procedural fragment
+    pattern (see the shader's own `pattern_t` doc comment). `:kind` defaults
+    `0` (flat `color`, `color_b`/`params` unused) — the pre-pattern-work
+    behaviour.
+  - `:texture` — a real `GPUTexture` (from `upload-texture!`, already
+    resolved via its Promise) to sample instead of `ctx`'s shared
+    `:default-texture` (1x1 white — a no-op multiply, so omitting `:texture`
+    draws exactly as before texture support existed).
+  - `:shade-kind` (0|1)/`:toon-threshold`/`:toon-smooth` — 2-tone toon
+    shading (see the shader's `toon_lit` doc comment). `:shade-kind`
+    defaults `0` (the original continuous N.L lighting).
+  Omitting `opts` entirely (every pre-`/loop`-maturity-pass call site) draws
+  byte-identically to before any of this."
   ([ctx pass buffers mvp color morph-weights joint-matrices]
    (draw! ctx pass buffers mvp color morph-weights joint-matrices nil))
-  ([{:keys [device pipe]} pass
+  ([{:keys [device pipe default-texture default-sampler]} pass
     {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
             joint-count joint-matrices-buf gbuf]}
     mvp color morph-weights joint-matrices
-    {:keys [color-b kind params] :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]}}]
+    {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth]
+     :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]
+          shade-kind 0 toon-threshold 0.4 toon-smooth 0.08}}]
    (let [q (.-queue device)
-         gdata (js/Float32Array. 32)] ;; mvp(16) + color(4) + color_b(4) + counts+kind(4, u32 view) + params(4)
+         ;; 144 bytes / 4 = 36 floats: mvp(16) + color(4) + color_b(4) +
+         ;; counts+kind(4, u32 view) + params(4) + shade_kind/toon_threshold/
+         ;; toon_smooth/_pad2(4, mixed u32/f32 view).
+         gdata (js/Float32Array. 36)]
      (.set gdata mvp 0)
      (.set gdata (f32 (conj (vec color) 1.0)) 16)
      (.set gdata (f32 (conj (vec color-b) 1.0)) 20)
      (let [gview (js/Uint32Array. (.-buffer gdata))]
-       (aset gview 24 vertex-count) (aset gview 25 morph-count) (aset gview 26 joint-count) (aset gview 27 kind))
+       (aset gview 24 vertex-count) (aset gview 25 morph-count) (aset gview 26 joint-count) (aset gview 27 kind)
+       (aset gview 32 shade-kind))
      (.set gdata (f32 params) 28)
+     (aset gdata 33 toon-threshold)
+     (aset gdata 34 toon-smooth)
      (.writeBuffer q gbuf 0 gdata)
     (when (pos? morph-count)
       (.writeBuffer q morph-weights-buf 0 (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
@@ -313,7 +429,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                       :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}
                                     #js {:binding 1 :resource #js {:buffer morph-deltas-buf}}
                                     #js {:binding 2 :resource #js {:buffer morph-weights-buf}}
-                                    #js {:binding 3 :resource #js {:buffer joint-matrices-buf}}]})]
+                                    #js {:binding 3 :resource #js {:buffer joint-matrices-buf}}
+                                    #js {:binding 4 :resource (.createView (or texture default-texture))}
+                                    #js {:binding 5 :resource (or sampler default-sampler)}]})]
       (.setPipeline pass pipe)
       (.setBindGroup pass 0 bind)
       (.setVertexBuffer pass 0 vbuf)
