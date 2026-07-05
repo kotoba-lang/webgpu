@@ -5,5 +5,8 @@
 ;; :local/root or a git dep and put `kami.webgpu` on their shadow-cljs source path.
 ;; The raw navigator.gpu/GPUDevice/... binding layer is org-w3-webgpu (ADR-2607051400
 ;; Phase 2) — kami.webgpu calls w3.webgpu, not the browser API directly.
+;; kami.wgsl's shared infix-expression core is the standalone expr repo
+;; (kotoba.expr/expr.core) — this repo no longer keeps its own copy (ADR-2607051500).
 {:paths ["src"]
- :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu"}}}
+ :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu"}
+         io.github.kotoba-lang/expr {:local/root "../expr"}}}

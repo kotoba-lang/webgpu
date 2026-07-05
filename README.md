@@ -5,6 +5,22 @@
 > EDN render-IR ドメインロジック（render-IR parsing / scene.edn bridge /
 > deterministic procedural demo scene / mat4 / rng / geometry）— は
 > `src/kotoba/webgpu_rs*` に namespace そのままで住む。旧リポは archive。
+>
+> 2026-07-05 (ADR-2607051500): `90-docs/migration/kami-webgpu-dsl-runtime-split.edn`
+> 台帳の cleanup が未実行のまま残っていた 38 個の無関係フォーマット DSL
+> （materialx/dxf/verilog/scad/graphql/dance/atom/css/…、各々 kotoba-lang 直下に
+> 独立 repo が既に存在）を削除。実際にレンダリングコードが依存していたのは
+> `kami.wgsl`→`kami.expr` の 1 本だけで、これは標準 `expr` repo への
+> `:local/root` 依存（`kotoba.expr`）へ置き換えた。あわせて、その孤児 DSL 群
+> だけを実バイナリ検証していた `scripts/format_gate.clj`（+ その専用
+> validator `gltf_validate.js`/`graphql_validate.js`）も削除（`gate`/`verify`
+> bb task から除去）。`gen_glsl.clj`/`gen_wgsl.clj`/`gen_pipeline_specs.clj`/
+> `fixtures/glsl`/`fixtures/pipeline_specs.edn` は `kami.wgsl`/`kami.shaders`/
+> `kami.pipelines`（= このrepo自身のドメイン）に実際に使われているため維持。
+> executor 本体は `org-w3-webgpu` 分離（Phase 2、`kami/webgpu.cljs` は
+> `kami.webgpu`のまま — 台帳が期待していた `kotoba.webgpu` へのリネームは、
+> 台帳の日付(2026-07-01)より後に起きた webgpu-rs 統合(2026-07-02)で実質的に
+> 上書きされたため、今回は適用しなかった）。
 
 **Declarative WebGPU from EDN — hiccup for the GPU.**
 
