@@ -1,8 +1,9 @@
 (ns kami.webgpu
   "kami-webgpu — a WebGPU renderer driven entirely from CLJ/EDN (hiccup for WebGPU).
 
-   ClojureScript calls the browser WebGPU JS API directly — no Rust, no wasm, no string
-   marshaling. TWO kinds of data drive it:
+   ClojureScript calls the browser WebGPU JS API via w3.webgpu (org-w3-webgpu, the raw
+   1:1 spec binding — ADR-2607051400) — no Rust, no wasm, no string marshaling. TWO
+   kinds of data drive it:
      • the render GRAPH (shaders, targets, samplers, pipelines, an ordered :passes
        array) — EDN describing HOW a frame is drawn; built once in `init!`. Override it
        with (init! canvas {:graph ...}); reorder/add passes by editing data.
@@ -12,7 +13,8 @@
    is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
    The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform)."
   (:require [kami.webgpu.ir :as ir]
-            [kami.shaders :as shaders]))
+            [kami.shaders :as shaders]
+            [w3.webgpu :as w3]))
 
 ;; --- column-major mat4 (WebGPU/wgpu convention) ------------------------------
 
@@ -126,7 +128,7 @@
                              (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}])
 
 (defn- build-pipeline [device fmt shaders {:keys [shader cull depth color]}]
-  (let [mod (.createShaderModule device #js {:code (get shaders shader)})
+  (let [mod (w3/create-shader-module! device #js {:code (get shaders shader)})
         desc #js {:layout "auto"
                   :vertex #js {:module mod :entryPoint "vs" :buffers (vlayout)}
                   :primitive #js {:cullMode (or cull "back")}
@@ -134,12 +136,12 @@
     (when color   ;; no :color → depth-only pipeline (shadow pass)
       (set! (.-fragment desc) #js {:module mod :entryPoint "fs"
                                    :targets #js [#js {:format (if (= color :screen) fmt color)}]}))
-    (.createRenderPipeline device desc)))
+    (w3/create-render-pipeline! device desc)))
 
 (defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
   [device pipe gbuf targets samplers binds]
-  (.createBindGroup device
-    #js {:layout (.getBindGroupLayout pipe 0)
+  (w3/create-bind-group! device
+    #js {:layout (w3/get-bind-group-layout pipe 0)
          :entries (into-array
                     (map-indexed
                       (fn [i b]
@@ -155,63 +157,60 @@
    default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
   ([canvas opts]
-   (let [gpu (.-gpu js/navigator)]
-     (if-not gpu
-       (js/Promise.reject "WebGPU not available (use a recent Chrome/Edge)")
-       (-> (.requestAdapter gpu)
-           (.then (fn [adapter] (.requestDevice adapter)))
-           (.then
-             (fn [device]
-               (let [graph (or (:graph opts) default-graph)
-                     w (max 1 (.-clientWidth canvas)) h (max 1 (.-clientHeight canvas))
-                     _ (set! (.-width canvas) w)
-                     _ (set! (.-height canvas) h)
-                     ctx (.getContext canvas "webgpu")
-                     fmt (.getPreferredCanvasFormat gpu)
-                     q (.-queue device)
-                     U js/GPUBufferUsage
-                     TU js/GPUTextureUsage
-                     ;; writeBuffer REQUIRES COPY_DST or it silently no-ops → zero buffers.
-                     mkbuf (fn [data usage]
-                             (let [b (.createBuffer device #js {:size (.-byteLength data)
-                                                                :usage (bit-or usage (.-COPY_DST U))})]
-                               (.writeBuffer q b 0 data) b))
-                     ;; one vertex+index buffer per geometry kind, baked from EDN specs
-                     ;; (ir/default-geometry + any {:geometry …} override); :geo picks a kind.
-                     geom-specs (merge ir/default-geometry (:geometry opts))
-                     geos (reduce-kv (fn [acc k spec]
-                                       (let [[v i] (mesh->buffers (ir/mesh-from-spec spec))]
-                                         (assoc acc k {:vbuf (mkbuf v (.-VERTEX U))
-                                                       :ibuf (mkbuf i (.-INDEX U))
-                                                       :idx-count (.-length i)})))
-                                     {} geom-specs)
-                     box (:box geos)
-                     inst (.createBuffer device #js {:size (* MAX-INST 96) :usage (bit-or (.-VERTEX U) (.-COPY_DST U))})
-                     gbuf (.createBuffer device #js {:size 240 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})
-                     ;; samplers from EDN
-                     samplers (reduce-kv (fn [m k s] (assoc m k (.createSampler device (clj->js s)))) {} (:samplers graph))
-                     ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
-                     targets (reduce-kv
-                               (fn [m k {:keys [depth color size]}]
-                                 (let [[tw th] (or size [w h])
-                                       f (or depth color)
-                                       tex (.createTexture device #js {:size #js [tw th] :format f
-                                                                       :usage (bit-or (.-RENDER_ATTACHMENT TU) (.-TEXTURE_BINDING TU))})]
-                                   (assoc m k {:tex tex :view (.createView tex) :format f})))
-                               {} (:targets graph))
-                     sdepth (.createTexture device #js {:size #js [w h] :format "depth24plus" :usage (.-RENDER_ATTACHMENT TU)})
-                     targets (assoc targets :screen-depth {:view (.createView sdepth) :format "depth24plus"})
-                     ;; pipelines + bind groups, from EDN
-                     pipelines (reduce-kv
-                                 (fn [m k pd]
-                                   (let [pipe (build-pipeline device fmt (:shaders graph) pd)]
-                                     (assoc m k {:pipe pipe :bind (build-bind device pipe gbuf targets samplers (:binds pd))})))
-                                 {} (:pipelines graph))]
-                 (.configure ctx #js {:device device :format fmt :alphaMode "opaque"})
-                 {:device device :queue q :ctx ctx :fmt fmt :w w :h h
-                  :vbuf (:vbuf box) :ibuf (:ibuf box) :inst inst :gbuf gbuf :idx-count (:idx-count box)
-                  :geos geos
-                  :targets targets :pipelines pipelines :graph graph}))))))))
+   (if-not (w3/supported?)
+     (js/Promise.reject "WebGPU not available (use a recent Chrome/Edge)")
+     (-> (w3/request-adapter!)
+         (.then (fn [adapter] (w3/request-device! adapter)))
+         (.then
+           (fn [device]
+             (let [graph (or (:graph opts) default-graph)
+                   w (max 1 (.-clientWidth canvas)) h (max 1 (.-clientHeight canvas))
+                   _ (set! (.-width canvas) w)
+                   _ (set! (.-height canvas) h)
+                   ctx (w3/get-context canvas)
+                   fmt (w3/preferred-canvas-format)
+                   q (.-queue device)
+                   ;; writeBuffer REQUIRES COPY_DST or it silently no-ops → zero buffers.
+                   mkbuf (fn [data usage]
+                           (let [b (w3/create-buffer! device #js {:size (.-byteLength data)
+                                                                  :usage (bit-or usage (w3/buffer-usage :copy-dst))})]
+                             (w3/write-buffer! q b data) b))
+                   ;; one vertex+index buffer per geometry kind, baked from EDN specs
+                   ;; (ir/default-geometry + any {:geometry …} override); :geo picks a kind.
+                   geom-specs (merge ir/default-geometry (:geometry opts))
+                   geos (reduce-kv (fn [acc k spec]
+                                     (let [[v i] (mesh->buffers (ir/mesh-from-spec spec))]
+                                       (assoc acc k {:vbuf (mkbuf v (w3/buffer-usage :vertex))
+                                                     :ibuf (mkbuf i (w3/buffer-usage :index))
+                                                     :idx-count (.-length i)})))
+                                   {} geom-specs)
+                   box (:box geos)
+                   inst (w3/create-buffer! device #js {:size (* MAX-INST 96) :usage (bit-or (w3/buffer-usage :vertex) (w3/buffer-usage :copy-dst))})
+                   gbuf (w3/create-buffer! device #js {:size 240 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   ;; samplers from EDN
+                   samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
+                   ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
+                   targets (reduce-kv
+                             (fn [m k {:keys [depth color size]}]
+                               (let [[tw th] (or size [w h])
+                                     f (or depth color)
+                                     tex (w3/create-texture! device #js {:size #js [tw th] :format f
+                                                                         :usage (bit-or (w3/texture-usage :render-attachment) (w3/texture-usage :texture-binding))})]
+                                 (assoc m k {:tex tex :view (w3/create-view tex) :format f})))
+                             {} (:targets graph))
+                   sdepth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
+                   targets (assoc targets :screen-depth {:view (w3/create-view sdepth) :format "depth24plus"})
+                   ;; pipelines + bind groups, from EDN
+                   pipelines (reduce-kv
+                               (fn [m k pd]
+                                 (let [pipe (build-pipeline device fmt (:shaders graph) pd)]
+                                   (assoc m k {:pipe pipe :bind (build-bind device pipe gbuf targets samplers (:binds pd))})))
+                               {} (:pipelines graph))]
+               (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
+               {:device device :queue q :ctx ctx :fmt fmt :w w :h h
+                :vbuf (:vbuf box) :ibuf (:ibuf box) :inst inst :gbuf gbuf :idx-count (:idx-count box)
+                :geos geos
+                :targets targets :pipelines pipelines :graph graph})))))))
 
 (defn- arr3 [m k d] (or (get m k) d))
 
@@ -267,7 +266,7 @@
     (.set gf (clj->js [(:shininess-min lt) (:shininess-max lt) (:sun-diffuse lt) (:metallic-diffuse-cut lt)]) 52)
     ;; light_d = [gamma, shadow-bias-slope, shadow-bias-min, shadow-texel]
     (.set gf (clj->js [(:gamma lt) (:shadow-bias-slope lt) (:shadow-bias-min lt) (:shadow-texel lt)]) 56)
-    (.writeBuffer queue gbuf 0 gf)
+    (w3/write-buffer! queue gbuf 0 gf)
     (let [idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
       (dotimes [i (count insts)]
         (let [{:keys [pos color size yaw metallic roughness emissive]} (nth insts i)
@@ -276,21 +275,21 @@
           (.set idata m base)
           (.set idata (clj->js [(color 0) (color 1) (color 2) 1]) (+ base 16))
           (.set idata (clj->js [(or metallic 0.0) (or roughness 0.65) (or emissive 0.0) 0]) (+ base 20))))
-      (.writeBuffer queue inst 0 idata)
-      (let [enc (.createCommandEncoder device)
+      (w3/write-buffer! queue inst 0 idata)
+      (let [enc (w3/create-command-encoder! device)
             ninst (count insts)
-            screen-view (.createView (.getCurrentTexture ctx))
+            screen-view (w3/create-view (w3/current-texture ctx))
             vw (fn [k] (if (= k :screen) screen-view (get-in targets [k :view])))
             draw-geom (fn [p pipe bnd]
                         (when (pos? ninst)
-                          (.setPipeline p pipe) (.setBindGroup p 0 bnd)
-                          (.setVertexBuffer p 1 inst)
+                          (w3/set-pipeline! p pipe) (w3/set-bind-group! p 0 bnd)
+                          (w3/set-vertex-buffer! p 1 inst)
                           ;; one instanced draw per geometry kind, offset into the instance buffer
                           (doseq [[gk gcount gfirst] geo-groups]
                             (let [{gv :vbuf gi :ibuf gn :idx-count} (get geos gk (:box geos))]
-                              (.setVertexBuffer p 0 gv)
-                              (.setIndexBuffer p gi "uint16")
-                              (.drawIndexed p gn gcount 0 0 gfirst)))))]
+                              (w3/set-vertex-buffer! p 0 gv)
+                              (w3/set-index-buffer! p gi "uint16")
+                              (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
         ;; run the graph's passes in order (EDN-driven)
         (doseq [{:keys [pipeline color depth clear clear-depth]} (:passes graph)]
           (let [{:keys [pipe bind]} (get pipelines pipeline)
@@ -299,10 +298,10 @@
                           #js [#js {:view (vw color) :loadOp "clear" :storeOp "store"
                                     :clearValue #js {:r (c 0) :g (c 1) :b (c 2) :a 1}}])
                         #js [])
-                rp (.beginRenderPass enc
+                rp (w3/begin-render-pass! enc
                      #js {:colorAttachments catts
                           :depthStencilAttachment #js {:view (vw depth) :depthLoadOp "clear"
                                                        :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}})]
             (draw-geom rp pipe bind)
-            (.end rp)))
-        (.submit queue #js [(.finish enc)])))))
+            (w3/end-pass! rp)))
+        (w3/submit! queue [(w3/finish! enc)])))))

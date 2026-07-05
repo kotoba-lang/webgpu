@@ -3,5 +3,7 @@
 ;; Clojure / ClojureScript / Rust / Datomic); the executor that turns it into
 ;; WebGPU calls is ClojureScript (browser-only). Consumers add this via
 ;; :local/root or a git dep and put `kami.webgpu` on their shadow-cljs source path.
+;; The raw navigator.gpu/GPUDevice/... binding layer is org-w3-webgpu (ADR-2607051400
+;; Phase 2) — kami.webgpu calls w3.webgpu, not the browser API directly.
 {:paths ["src"]
- :deps  {}}
+ :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu"}}}
