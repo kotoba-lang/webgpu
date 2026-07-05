@@ -19,11 +19,12 @@
      (struct* :VO [[:clip [:vec4 :f32] {:builtin :position}] [:n [:vec3 :f32] {:location 0}] …])
      (binding* {:group 0 :binding 0 :space :uniform} :g :G)   (shader item…)
 
-   Arithmetic/calls come from the shared kami.expr core; WGSL only customises the surface — idents are
+   Arithmetic/calls come from the shared kotoba.expr/expr.core (org-w3-webgpu-style split, ADR-2607051500);
+   WGSL only customises the surface — idents are
    kebab→snake, integral literals get a `.0` (f32), vecN/matN heads become typed constructors, and the
    `:i`/`:.` forms (raw int, swizzle-on-expr) are WGSL-specific `:special`s."
   (:require [clojure.string :as str]
-            [kami.expr :as kx]))
+            [kotoba.expr :as kx]))
 
 (defn- ident [s] (str/replace (name s) "-" "_"))
 
