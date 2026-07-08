@@ -6,8 +6,19 @@ jobs:
   gates:
     name: bb gates (EDN · shaders · GPU-IR)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webgpu
     steps:
       - uses: actions/checkout@v4
+        with: { path: webgpu }
+      # kami.wgsl requires kotoba.expr via bb.edn's :paths ["src" "test" "../expr/src"] (the
+      # shared infix-expression core split out, ADR-2607051500) -- checked out here as a sibling
+      # so that relative path resolves. This step was missing entirely before (main's `gates` job
+      # has been red since the expr split: "Could not locate kotoba/expr.bb/.clj/.cljc").
+      - name: Checkout kotoba-lang/expr (sibling dep, bb.edn "../expr/src")
+        uses: actions/checkout@v4
+        with: { repository: kotoba-lang/expr, path: expr }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '21' }
       - name: Install babashka
@@ -17,3 +28,36 @@ jobs:
         run: bb test
       - name: GLSL backend — EDN → WGSL → GLSL ES 3.00 (web fallback shaders)
         run: bb gen-glsl
+
+  render-verify:
+    # Real-pixel headless-WebGL2 verification (test/playwright_*.clj via kami.playwright + the
+    # scripts/pw_eval.cjs Playwright bridge, readPixels-based). Unlike WebGPU (found unreliable
+    # headless on Linux/SwiftShader in a sibling repo's own investigation), headless WebGL2 via
+    # SwiftShader/ANGLE is reliable on ubuntu-latest -- verified directly here (Docker container
+    # matching mcr.microsoft.com/playwright:v1.61.0-jammy, then this real runner) before wiring
+    # this job in. Runs on ubuntu-latest deliberately, not macos-latest: much cheaper, and this
+    # is the tractable case (see kami.playwright's docstring / scripts/pw_eval.cjs's comments for
+    # the cross-platform Chromium-resolution fix this job depends on).
+    name: bb render-test (headless WebGL2 pixel verification)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webgpu
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: webgpu }
+      - name: Checkout kotoba-lang/expr (sibling dep, bb.edn "../expr/src")
+        uses: actions/checkout@v4
+        with: { repository: kotoba-lang/expr, path: expr }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+      - name: Install babashka
+        uses: DeLaGuardo/setup-clojure@13.0
+        with: { bb: 'latest' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm ci
+      - name: Install headless Chromium (full "Chrome for Testing" build)
+        run: npx playwright install --with-deps chromium
+      - name: bb render-test — headless WebGL2 pixel-verify (sprite-SDF · anim · sky+text · whole-frame)
+        run: bb render-test
