@@ -20,12 +20,17 @@
   "One sprite primitive `[kind props]` at entity centre [ex ey] → a GPU quad instance.
    props use the sprite2d vocabulary: :dx/:dy offset, :r (circle), :rx/:ry (ellipse/arc), :w/:h
    (rect), :fill colour, optional :anim. Returns {:pos :size :rot :shape :color} (size = half-extents),
-   carrying :anim when present so anim-quad can drive it per frame."
+   carrying :anim when present so anim-quad can drive it per frame.
+
+   :rect's :w/:h are FULL width/height in the sprite2d vocabulary (kami.sprite2d.cljs's Canvas2D
+   reference painter draws `fillRect(dx - w/2, dy - h/2, w, h)` — a w×h box centred on dx/dy), so
+   they're halved here to match :size's half-extent convention; :r/:rx/:ry are already radii
+   (= half-extents) in that same vocabulary, so circle/ellipse/arc need no such conversion."
   [[ex ey] [kind {:keys [dx dy r rx ry w h rot fill] :as props}]]
   (let [[sw sh] (case kind
                   :circle  [(or r 1.0)  (or r 1.0)]
                   :ellipse [(or rx 1.0) (or ry 1.0)]
-                  :rect    [(or w 1.0)  (or h 1.0)]
+                  :rect    [(/ (double (or w 1.0)) 2.0) (/ (double (or h 1.0)) 2.0)]
                   :arc     [(or rx r 1.0) (or ry r 1.0)]
                   [(or r rx 1.0) (or r ry 1.0)])]
     (cond-> {:pos   [(+ ex (or dx 0.0)) (+ ey (or dy 0.0))]
