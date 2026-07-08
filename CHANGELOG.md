@@ -36,3 +36,24 @@ kami-webgpu — declarative WebGPU + UI/input/audio/state from EDN (hiccup for t
 - CI: GitHub Actions runs `bb test` on every push.
 - Bug found via coverage work and fixed upstream: kotoba-clj `into` overflowed when the dst was
   at exact capacity (a vector literal); now returns a correctly-sized new vector.
+- **Bug fixed: `kami.sprite-gpu/prim->quad`'s `:rect` case doubled the rendered width/height.**
+  A prior agent (kotoba-lang/kami-isekai-assets PR #4) found this while validating a Canvas2D
+  probe against the GPU path but left the fix to this repo. `:w`/`:h` are FULL width/height in
+  the sprite2d vocabulary (`kami.sprite2d.cljs`'s reference `:rect` painter draws
+  `fillRect(dx-w/2, dy-h/2, w, h)`), but `prim->quad` was passing them straight into `:size`,
+  which the sprite-SDF vertex shader consumes as a HALF-extent (quad corners ±1 scaled by
+  `:size`) — a `[:rect {:w 100 :h 50}]` rendered at ~200×100px instead of ~100×50px. Fixed by
+  halving `:w`/`:h` in `prim->quad`; `:r`/`:rx`/`:ry` (circle/ellipse/arc) were already radii
+  (= half-extents) and needed no change. New pixel-verified regression test
+  (`test/playwright_rect_extent_test.clj`, wired into `bb render-test`) renders the probe in a
+  real headless WebGL2 browser and measures its on-screen bounding box; confirmed it fails
+  against the pre-fix code (measured ~200×100px) and passes against the fix (~100×50px).
+  Investigated before fixing: no scene in this repo or in `gftdcojp/network-isekai`'s
+  `public/games/*/scene.edn` (26 of 31 use `:rect`) currently renders through this GPU path —
+  every one of those scenes uses `:render/sprite2d` (the correct Canvas2D painter); the
+  GPU/instanced path (`:render/gpu2d`) exists in `network-isekai`'s `isekai/game.cljc` but no
+  scene opts into it. `kotoba-lang/kami-isekai-assets`'s render-adapter does feed this path, but
+  its own render_pixel_test.clj only exercises `:ellipse`/`:circle` primitives (the slime
+  preset), not `:rect`. So no shipped/tested content depended on the buggy half-extent
+  behaviour — the fix is a straight correctness fix, not a breaking behaviour change to any
+  live consumer.
