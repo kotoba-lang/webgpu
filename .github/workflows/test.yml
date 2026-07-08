@@ -9,8 +9,18 @@ on:
 jobs:
   cljc-interpreters:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webgpu
     steps:
       - uses: actions/checkout@v4
+        with: { path: webgpu }
+      # kami.wgsl requires kotoba.expr via bb.edn's :paths ["src" "test" "../expr/src"] (the
+      # shared infix-expression core split out, ADR-2607051500) -- checked out as a sibling so
+      # the relative path resolves (this job was red on main since that split without this step).
+      - name: Checkout kotoba-lang/expr (sibling dep, bb.edn "../expr/src")
+        uses: actions/checkout@v4
+        with: { repository: kotoba-lang/expr, path: expr }
       - uses: DeLaGuardo/setup-clojure@13.0
         with:
           bb: latest

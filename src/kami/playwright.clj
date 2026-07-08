@@ -2,7 +2,10 @@
   "playwright-clj — drive a headless WebGL2 Chromium from CLJ/bb. (eval-page js) runs JS in a real
    browser page and returns the result as EDN, so browser tests (WebGL2 shader compilation, canvas,
    DOM, fetch) run reproducibly in the CLJ toolchain — no live extension needed. Resolves Playwright
-   from the npx cache and auto-detects the chromium binary; shells to scripts/pw_eval.cjs."
+   from NODE_PATH / the npx cache / local node_modules, and resolves the chromium binary itself via
+   Playwright's own `chromium.executablePath()` (cross-platform: no hardcoded cache path, works the
+   same on macOS dev machines and Linux CI runners — see scripts/pw_eval.cjs); shells to
+   scripts/pw_eval.cjs."
   (:require [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.java.io :as io]

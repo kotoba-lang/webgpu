@@ -1,18 +1,22 @@
-// playwright-clj bridge (CommonJS). Resolve playwright via NODE_PATH; auto-detect a headless
-// chromium shell from the ms-playwright cache (override with PW_EXE). Usage:
+// playwright-clj bridge (CommonJS). Resolve playwright via NODE_PATH; resolve the chromium
+// binary via Playwright's own `chromium.executablePath()` (override with PW_EXE). Usage:
 //   NODE_PATH=<pw>/node_modules node pw_eval.cjs <js-file> [url]
+//
+// Cross-platform note (fixed 2026-07-08): this used to hand-roll a cache-path search under
+// `~/Library/Caches/ms-playwright` for a `chromium_headless_shell*/chrome-headless-shell-mac-arm64`
+// binary -- both the cache root and the per-platform subdirectory name were macOS-only, so on
+// Linux (e.g. ubuntu-latest CI runners, whose cache lives at `~/.cache/ms-playwright` and whose
+// binary subdirectory is `chrome-headless-shell-linux64`) `findExe()` silently returned
+// `undefined` and every launch fell through to Playwright's own default resolution instead.
+// `chromium.executablePath()` is the public, version-independent Playwright API for exactly this
+// (same technique that fixed the analogous macOS-only-binary-resolution issue in the sibling
+// wasm-webcomponent repo's WebGPU harness) -- it resolves the correct platform/arch binary
+// Playwright actually has installed, with no OS-specific path logic here at all.
 const { chromium } = require('playwright');
-const { readFileSync, readdirSync, existsSync } = require('fs');
-const os = require('os'), path = require('path');
+const { readFileSync } = require('fs');
 function findExe() {
   if (process.env.PW_EXE) return process.env.PW_EXE;
-  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
-  if (!existsSync(cache)) return undefined;
-  const dirs = readdirSync(cache).filter(d => d.startsWith('chromium_headless_shell')).sort();
-  for (const d of dirs.reverse()) {
-    const exe = path.join(cache, d, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell');
-    if (existsSync(exe)) return exe;
-  }
+  try { return chromium.executablePath(); } catch (_e) { return undefined; }
 }
 (async () => {
   const js = readFileSync(process.argv[2], 'utf8');
