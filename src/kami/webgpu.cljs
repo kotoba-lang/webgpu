@@ -210,23 +210,29 @@
                {:device device :queue q :ctx ctx :fmt fmt :w w :h h
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst inst :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
-                :targets targets :pipelines pipelines :graph graph})))))))
+                :targets targets :pipelines pipelines :graph graph
+                ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
+                ;; SAME value (by reference) across draw! calls in normal use (compose
+                ;; the render-IR once, call draw! every rAF) — caching the sort/group/
+                ;; marshal-to-Float32Array/GPU-upload work keyed on that reference turns
+                ;; a static scene's per-frame cost from O(instance count) back to O(1).
+                ;; See [[compute-instance-data]]/[[draw!]].
+                :instance-cache (atom nil)})))))))
 
 (defn- arr3 [m k d] (or (get m k) d))
 
-(defn draw!
-  "Draw one frame from a render-IR map: {:globals {:sky {:horizon :sun-dir :sun} :eye
-   :target} :instances [{:pos :color :size :yaw :metallic :roughness :emissive}]}. Runs
-   the graph's :passes in order. Synchronous; no wasm."
-  [{:keys [device queue ctx w h vbuf ibuf inst gbuf idx-count targets pipelines graph geos]} ir]
-  (let [g (:globals ir)
-        sky (:sky g)
-        horizon (arr3 sky :horizon [0.7 0.8 0.9])
-        sun-dir (arr3 sky :sun-dir [-0.4 -0.85 -0.35])
-        sun (arr3 sky :sun [1 0.96 0.85])
-        ;; sort by geometry so each kind's instances are contiguous → one instanced draw per kind
-        ;; via a firstInstance offset (depth handled by the z-buffer, so draw order is free).
-        insts (->> (:instances ir) (take MAX-INST) (sort-by #(name (or (:geo %) :box))) vec)
+(defn- compute-instance-data
+  "Pure: sort instances by geometry kind (so each kind's instances are
+  contiguous → one instanced draw per kind via a firstInstance offset —
+  depth is handled by the z-buffer, so draw order is free), group them,
+  compute the XZ centroid (the default-camera fallback point), and
+  marshal the packed per-instance Float32Array (model matrix + color +
+  material — everything [[draw!]] needs that depends ONLY on
+  `raw-instances`, nothing on camera/lighting/sky). Factored out so
+  `draw!` can cache it across frames when the instance list hasn't
+  changed — see the `:instance-cache` note on [[init!]]."
+  [raw-instances]
+  (let [insts (->> raw-instances (take MAX-INST) (sort-by #(name (or (:geo %) :box))) vec)
         geo-groups (loop [parts (partition-by #(or (:geo %) :box) insts), at 0, acc []]
                      (if (empty? parts)
                        acc
@@ -235,6 +241,45 @@
         cz (reduce (fn [a {:keys [pos]}] [(+ (a 0) (pos 0)) (+ (a 1) (pos 2))]) [0 0] insts)
         n (max 1 (count insts))
         [cxx czz] [(/ (cz 0) n) (/ (cz 1) n)]
+        idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
+    (dotimes [i (count insts)]
+      (let [{:keys [pos color size yaw metallic roughness emissive]} (nth insts i)
+            m (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1))
+            base (* i 24)]
+        (.set idata m base)
+        (.set idata (clj->js [(color 0) (color 1) (color 2) 1]) (+ base 16))
+        (.set idata (clj->js [(or metallic 0.0) (or roughness 0.65) (or emissive 0.0) 0]) (+ base 20))))
+    {:raw-instances raw-instances :insts insts :geo-groups geo-groups :cxx cxx :czz czz :idata idata}))
+
+(defn draw!
+  "Draw one frame from a render-IR map: {:globals {:sky {:horizon :sun-dir :sun} :eye
+   :target} :instances [{:pos :color :size :yaw :metallic :roughness :emissive}]}. Runs
+   the graph's :passes in order. Synchronous; no wasm.
+
+   Caches the sort/group/marshal-to-buffer work in `instance-cache` (see
+   [[init!]]) keyed on `(:instances ir)` BY REFERENCE (`identical?`, not
+   `=` — cheap, and correct for the common case of composing a render-IR
+   once and calling `draw!` every rAF with that same value; a caller that
+   rebuilds an equal-but-not-identical instances vector every frame just
+   won't hit the cache, not a correctness issue). Only re-uploads the GPU
+   instance buffer when the cache actually misses — ADR-2607100100's M4
+   investigation measured a static scene's per-frame cost scaling with
+   instance count purely from this redundant re-sort/re-marshal/re-upload
+   (~36ms/frame at 20k instances), not from any GPU-side rendering limit."
+  [{:keys [device queue ctx w h vbuf ibuf inst gbuf idx-count targets pipelines graph geos instance-cache]} ir]
+  (let [cached (some-> instance-cache deref)
+        cache-hit? (and cached (identical? (:instances ir) (:raw-instances cached)))
+        {:keys [insts geo-groups cxx czz idata]}
+        (if cache-hit?
+          cached
+          (let [fresh (compute-instance-data (:instances ir))]
+            (some-> instance-cache (reset! fresh))
+            fresh))
+        g (:globals ir)
+        sky (:sky g)
+        horizon (arr3 sky :horizon [0.7 0.8 0.9])
+        sun-dir (arr3 sky :sun-dir [-0.4 -0.85 -0.35])
+        sun (arr3 sky :sun [1 0.96 0.85])
         eye (arr3 g :eye [(+ cxx 60) 80 (+ czz 60)])
         target (arr3 g :target [cxx 0 czz])
         ;; projection as data: FOV (deg) + near/far planes from globals (defaults = the old look)
@@ -267,41 +312,35 @@
     ;; light_d = [gamma, shadow-bias-slope, shadow-bias-min, shadow-texel]
     (.set gf (clj->js [(:gamma lt) (:shadow-bias-slope lt) (:shadow-bias-min lt) (:shadow-texel lt)]) 56)
     (w3/write-buffer! queue gbuf 0 gf)
-    (let [idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
-      (dotimes [i (count insts)]
-        (let [{:keys [pos color size yaw metallic roughness emissive]} (nth insts i)
-              m (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1))
-              base (* i 24)]
-          (.set idata m base)
-          (.set idata (clj->js [(color 0) (color 1) (color 2) 1]) (+ base 16))
-          (.set idata (clj->js [(or metallic 0.0) (or roughness 0.65) (or emissive 0.0) 0]) (+ base 20))))
-      (w3/write-buffer! queue inst 0 idata)
-      (let [enc (w3/create-command-encoder! device)
-            ninst (count insts)
-            screen-view (w3/create-view (w3/current-texture ctx))
-            vw (fn [k] (if (= k :screen) screen-view (get-in targets [k :view])))
-            draw-geom (fn [p pipe bnd]
-                        (when (pos? ninst)
-                          (w3/set-pipeline! p pipe) (w3/set-bind-group! p 0 bnd)
-                          (w3/set-vertex-buffer! p 1 inst)
-                          ;; one instanced draw per geometry kind, offset into the instance buffer
-                          (doseq [[gk gcount gfirst] geo-groups]
-                            (let [{gv :vbuf gi :ibuf gn :idx-count} (get geos gk (:box geos))]
-                              (w3/set-vertex-buffer! p 0 gv)
-                              (w3/set-index-buffer! p gi "uint16")
-                              (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
-        ;; run the graph's passes in order (EDN-driven)
-        (doseq [{:keys [pipeline color depth clear clear-depth]} (:passes graph)]
-          (let [{:keys [pipe bind]} (get pipelines pipeline)
-                catts (if color
-                        (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
-                          #js [#js {:view (vw color) :loadOp "clear" :storeOp "store"
-                                    :clearValue #js {:r (c 0) :g (c 1) :b (c 2) :a 1}}])
-                        #js [])
-                rp (w3/begin-render-pass! enc
-                     #js {:colorAttachments catts
-                          :depthStencilAttachment #js {:view (vw depth) :depthLoadOp "clear"
-                                                       :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}})]
-            (draw-geom rp pipe bind)
-            (w3/end-pass! rp)))
-        (w3/submit! queue [(w3/finish! enc)])))))
+    ;; only re-upload the GPU instance buffer on a real cache miss — see
+    ;; the :instance-cache note on init! and the draw! docstring.
+    (when-not cache-hit? (w3/write-buffer! queue inst 0 idata))
+    (let [enc (w3/create-command-encoder! device)
+          ninst (count insts)
+          screen-view (w3/create-view (w3/current-texture ctx))
+          vw (fn [k] (if (= k :screen) screen-view (get-in targets [k :view])))
+          draw-geom (fn [p pipe bnd]
+                      (when (pos? ninst)
+                        (w3/set-pipeline! p pipe) (w3/set-bind-group! p 0 bnd)
+                        (w3/set-vertex-buffer! p 1 inst)
+                        ;; one instanced draw per geometry kind, offset into the instance buffer
+                        (doseq [[gk gcount gfirst] geo-groups]
+                          (let [{gv :vbuf gi :ibuf gn :idx-count} (get geos gk (:box geos))]
+                            (w3/set-vertex-buffer! p 0 gv)
+                            (w3/set-index-buffer! p gi "uint16")
+                            (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
+      ;; run the graph's passes in order (EDN-driven)
+      (doseq [{:keys [pipeline color depth clear clear-depth]} (:passes graph)]
+        (let [{:keys [pipe bind]} (get pipelines pipeline)
+              catts (if color
+                      (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
+                        #js [#js {:view (vw color) :loadOp "clear" :storeOp "store"
+                                  :clearValue #js {:r (c 0) :g (c 1) :b (c 2) :a 1}}])
+                      #js [])
+              rp (w3/begin-render-pass! enc
+                   #js {:colorAttachments catts
+                        :depthStencilAttachment #js {:view (vw depth) :depthLoadOp "clear"
+                                                     :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}})]
+          (draw-geom rp pipe bind)
+          (w3/end-pass! rp)))
+      (w3/submit! queue [(w3/finish! enc)]))))
