@@ -4,6 +4,41 @@ kami-webgpu — declarative WebGPU + UI/input/audio/state from EDN (hiccup for t
 
 ## Unreleased
 
+### Dedup pass across kotoba-lang/{sprite-gpu,gpu,webgl} (2026-07-09)
+
+Three standalone repos (`kotoba-lang/sprite-gpu`, `kotoba-lang/gpu`, `kotoba-lang/webgl`) each
+carried a duplicate of a namespace that also lives here (`kami.sprite-gpu`, `kami.gpu`,
+`kami.webgl`), left over from the abandoned "clj-wgsl Phase-4" split-migration + independent
+"restore" commits (2026-07-02). All three pairs were diffed in detail rather than assumed:
+
+- **`sprite-gpu`** — `kami.sprite-gpu` (here) wins. It has the `:rect` half-extent bug fix (PR #10,
+  above) that the standalone repo's copy never received; the standalone repo's own git history has
+  no commits beyond CI/lint housekeeping since its restore. `kotoba-lang/sprite-gpu`'s
+  `kotoba.sprite-gpu` is now a thin re-export of this namespace.
+- **`gpu`** — `kami.gpu` (here) wins, though the diff is docstring-only (no functional bug on
+  either side — every `def`/`defn` body was byte-identical). `kami.gpu` reflects the more current
+  "capability-gated render-graph contract" doc pass; the standalone repo received no comparable
+  work. `kotoba-lang/gpu`'s `kotoba.gpu` is now a thin re-export of this namespace.
+- **`webgl` — the SURPRISING one: the standalone repo was more current here, not this repo.**
+  `kotoba-lang/webgl`'s `kotoba.webgl` was already `.cljc` with a `#?(:clj ...)` fallback branch
+  (JVM-safe capability queries + explicit "browser-only executor" errors instead of blowing up on
+  `js/navigator`), backed by its own JVM test (`webgl-test`). `kami.webgl` here was plain `.cljs`
+  with none of that — a real feature gap, not just docs. So instead of repointing consumers away
+  from the standalone repo's content, **that `.cljc` structure was ported INTO this repo**:
+  `src/kami/webgl.cljs` → `src/kami/webgl.cljc` (adds the `:clj` branch, verbatim-ported from
+  `kotoba.webgl`'s), `src/kami/webgl/glsl.cljs` → `src/kami/webgl/glsl.cljc` (pure data, no
+  reader-conditional needed — its content was already byte-identical between the two repos), and a
+  new `test/webgl_test.clj` (ported from the standalone repo's) wired into `bb test`, giving
+  `kami.webgl` JVM coverage it never had. This also matches this repo's own stated design
+  philosophy ("A `.cljc`-first library", per `deps.edn`'s header comment). `kotoba-lang/webgl`'s
+  `kotoba.webgl` is now, in turn, a thin re-export of this (now at-parity) namespace.
+
+Consumers: `network-isekai`, `net-babiniku`, and everything else already depending on this repo are
+unaffected (same public API, same behaviour, `kami.webgl` gained functionality rather than losing
+any). `kotoba-lang/scene2d` and `kotoba-lang/webgl` (the repo, for its own internal use before this
+change) have been repointed from the standalone `sprite-gpu`/`gpu` repos to depend on this repo
+directly. See each affected repo's own README/CHANGELOG for its side of this.
+
 ### Renderer (`kami.webgpu`)
 - Declarative WebGPU from a pure EDN render-IR — CLJS drives the browser WebGPU API directly
   (no Rust, no wasm, no per-frame string marshaling).
