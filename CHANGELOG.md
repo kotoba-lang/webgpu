@@ -4,6 +4,45 @@ kami-webgpu — declarative WebGPU + UI/input/audio/state from EDN (hiccup for t
 
 ## Unreleased
 
+### `draw!` caches per-frame instance-buffer work for a static scene (2026-07-10)
+
+Found via `com-junkawasaki/root` ADR-2607100100's M4 investigation: a real-browser
+benchmark (`kami-app-amenominaka`, Playwright + full Chromium, static scene, 60 frames)
+showed `draw!`'s frame time scaling with instance count even when nothing in the scene
+changed between frames — 15,000 instances cost ~34ms/frame (≈29fps). Reading the code
+found why: every `draw!` call unconditionally re-sorted `:instances` by geometry kind,
+re-grouped them, re-marshaled the packed model-matrix+color+material `Float32Array`, and
+re-uploaded it to the GPU via `write-buffer!` — even for a scene composed once and drawn
+every `requestAnimationFrame` with the exact same value, the overwhelmingly common usage
+pattern.
+
+`init!`'s returned context now carries an `:instance-cache` atom; `draw!` factors that
+sort/group/centroid/marshal work into a new pure `compute-instance-data`, keyed on
+`(:instances ir)` by **reference** (`identical?`, not `=` — cheap, and correct for the
+common "compose once, draw every frame" pattern; a caller that rebuilds an equal-but-
+not-identical instances vector every frame just won't hit the cache, not a correctness
+issue) and skips the GPU `write-buffer!` entirely on a cache hit.
+
+Backward compatible: a caller that builds a context map without going through `init!`
+(no `:instance-cache` key) just always takes the cache-miss path — same behavior as
+before, no crash (`some->` guards every cache read/write).
+
+Measured improvement (same benchmark, same machine, before → after): 5,000 instances
+11.4ms→0.47ms/frame; 15,000 instances 34.0ms→0.85ms/frame; 20,000 instances (capped at
+`MAX-INST` 16,384) 36.3ms→1.03ms/frame — roughly a 30-40× reduction in per-frame cost at
+the high end, confirmed by re-running the existing `kami-app-amenominaka` M2 real-browser
+smoke test (`test/render/verify_m2_render.cljs`) unchanged and getting the identical
+correct screenshot. `bb test`'s existing `.cljc` suite (unaffected — this change is
+`.cljs`-only) stays green throughout.
+
+Note this closes the *actual* wall ADR-2607100100 M4 investigated — a redundant re-upload,
+not a GPU rendering-capacity limit. `wgsl` `@compute`-based GPU-side instance generation
+(the ADR's original speculative M4 direction) was not pursued since it wouldn't have
+addressed this specific, now-measured bottleneck; it remains available as future work if a
+*different* real wall is found later (e.g. from the still-unaddressed `MAX-INST` 16,384
+hard cap silently truncating larger scenes — a correctness gap, not a performance one,
+flagged separately).
+
 ### Dedup pass across kotoba-lang/{sprite-gpu,gpu,webgl} (2026-07-09)
 
 Three standalone repos (`kotoba-lang/sprite-gpu`, `kotoba-lang/gpu`, `kotoba-lang/webgl`) each
