@@ -11,6 +11,16 @@
             [kami.sprite-gpu :as sg]
             [kami.webgl.glsl :as glsl]))
 
+;; `.cljc`: the CLJS branch is the real browser WebGL2 executor; the CLJ branch is a JVM-safe stand-
+;; in (ported from kotoba-lang/webgl's `kotoba.webgl`, ADR/CHANGELOG.md — that repo's copy carried
+;; this platform split, kami.webgl.cljs here didn't, so this repo silently regressed portability
+;; when the two diverged). Requiring this namespace on the JVM (e.g. from a `bb`/`clj` test or REPL
+;; that transitively pulls it in) no longer throws an opaque "js/navigator is unbound" — the
+;; capability-query fns (`webgpu-available?`, `pick-backend`, `caps`) return real, useful JVM
+;; answers, and the browser-only executors fail fast with a clear `ex-info` instead.
+#?(:cljs
+   (do
+
 ;; ── backend selection ────────────────────────────────────────────────────────────────────────────
 (defn webgpu-available? [] (boolean (and js/navigator (.-gpu js/navigator))))
 
@@ -201,3 +211,30 @@
         (.uniform1i gl (.getUniformLocation gl lit-p "_group_0_binding_1_fs") 0)
         (.drawElementsInstanced gl (.-TRIANGLES gl) (:count mesh) (.-UNSIGNED_SHORT gl) 0 n)
         (.bindVertexArray gl nil)))))
+
+   )
+
+   :clj
+   (do
+     (defn webgpu-available?
+       []
+       false)
+
+     (defn pick-backend
+       []
+       :webgl2)
+
+     (defn caps
+       [_gl]
+       (gpu/caps-from-device :webgl2 {:compute false :storage false :instancing true}))
+
+     (defn- browser-only [f data]
+       (throw (ex-info (str "kami.webgl/" f " is a browser ClojureScript WebGL2 executor")
+                       (merge {:namespace 'kami.webgl :platform :clj} data))))
+
+     (defn webgl2-context [canvas] (browser-only "webgl2-context" {:canvas canvas}))
+     (defn program [gl vsrc fsrc] (browser-only "program" {:gl gl :vert vsrc :frag fsrc}))
+     (defn sprite-renderer [& args] (browser-only "sprite-renderer" {:args args}))
+     (defn render-2d! [& args] (browser-only "render-2d!" {:args args}))
+     (defn scene-renderer [& args] (browser-only "scene-renderer" {:args args}))
+     (defn lit-renderer [& args] (browser-only "lit-renderer" {:args args}))))

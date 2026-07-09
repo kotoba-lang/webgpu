@@ -11,7 +11,14 @@
       "ellipse shares the circle SDF; the quad :size makes it elliptical")
   (is (= [380 340] (:size (sg/prim->quad [0 0] [:ellipse {:rx 380 :ry 340 :fill [0 0 0]}]))))
   (is (= 1 (:shape (sg/prim->quad [0 0] [:rect {:w 10 :h 20 :fill [1 1 1]}]))) "rect = box SDF")
-  (is (= [1 1 1 1.0] (:color (sg/prim->quad [0 0] [:circle {:r 1 :fill [1 1 1]}]))) "rgb→rgba"))
+  (is (= [1 1 1 1.0] (:color (sg/prim->quad [0 0] [:circle {:r 1 :fill [1 1 1]}]))) "rgb→rgba")
+  ;; regression for PR #10: :rect's :w/:h are FULL width/height in the sprite2d vocabulary
+  ;; (kami.sprite2d.cljs's Canvas2D reference draws a w×h box centred on dx/dy), so :size (a
+  ;; half-extent) must be half of them — previously :w/:h were passed straight through, doubling
+  ;; on-screen size on each axis. (kotoba-lang/sprite-gpu had the same bug independently; fixed in
+  ;; the same consolidation pass that made it re-export this namespace — see that repo's CHANGELOG.)
+  (is (= [5.0 10.0] (:size (sg/prim->quad [0 0] [:rect {:w 10 :h 20 :fill [1 1 1]}])))
+      "rect :size is half of :w/:h (half-extent convention)"))
 
 (deftest recipe-and-frame
   (let [gorilla [[:ellipse {:dx 0   :dy -40 :rx 380 :ry 340 :fill [0.13 0.11 0.10]}]
