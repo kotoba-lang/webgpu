@@ -1,3 +1,5 @@
+
+> **Authority (ADR-2607102200 addendum 8–9):** this repo is the **browser WebGPU executor** (`kami.webgpu*`) plus compute-golden harness (`kami.cartpole-math`). Game browser surface → `kotoba-lang/host`. Pure retired-rs domain → `kotoba-lang/webgpu-rs`. Domain IR packages are siblings (gpu/webgl/dance/…).
 > **ADR-2607102200 addendum 5:** render-domain modules live in sibling packages
 > (`wgsl`, `sprite-gpu`, `sky`, `shaders`, `render-shaders`, `scene2d`, `sprite2d`).
 > This repo is the WebGPU/WebGL *executor* + harness; `kami.*` namespaces still
