@@ -1,6 +1,7 @@
 ;; kami-webgpu — declarative WebGPU browser executor (hiccup for the GPU).
-;; Domain / host surface extracted (ADR-2607102200 addenda 5–8).
-;; Remaining here: kami.webgpu* executor + cartpole-math harness + fixtures/scripts.
+;; Domain / host surface extracted (ADR-2607102200 addenda 5–9).
+;; Remaining here: kami.webgpu* executor only.
+;; cartpole-math → kotoba-lang/cartpole-math; webgpu-rs → kotoba-lang/webgpu-rs.
 {:paths ["src"]
  :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu"}
          io.github.kotoba-lang/wgsl {:local/root "../wgsl"}
@@ -20,4 +21,5 @@
          io.github.kotoba-lang/pipelines {:local/root "../pipelines"}
          io.github.kotoba-lang/level {:local/root "../level"}
          io.github.kotoba-lang/host {:local/root "../host"}
-         io.github.kotoba-lang/playwright {:local/root "../playwright"}}}
+         io.github.kotoba-lang/playwright {:local/root "../playwright"}
+         io.github.kotoba-lang/cartpole-math {:local/root "../cartpole-math"}}}
