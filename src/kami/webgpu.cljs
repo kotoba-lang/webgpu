@@ -118,7 +118,37 @@
    :passes    [{:pipeline :shadow :depth :shadow      :clear-depth 1.0}
                {:pipeline :main   :color :screen :depth :screen-depth :clear :sky}]})
 
-(def ^:private MAX-INST 16384)
+;; ADR-2607100100 M6: this used to be a hard cap — draw! silently `take`-ing
+;; the first MAX-INST instances and dropping the rest, a correctness gap for
+;; genuinely large (city-scale) scenes, not a perf one (that's M4). It's now
+;; only the STARTING allocation size for the GPU instance buffer; draw! grows
+;; it (doubling) via [[ensure-inst-buffer!]] when a scene needs more. Kept at
+;; the same value so typical scenes (<16384 instances) still pay zero extra
+;; buffer churn versus before this fix.
+(def ^:private INITIAL-INST-CAPACITY 16384)
+(def ^:private INST-STRIDE 96)   ;; bytes/instance: model(16)+color(4)+material(4) floats
+
+(defn- mk-inst-buffer [device capacity]
+  (w3/create-buffer! device #js {:size (* capacity INST-STRIDE)
+                                 :usage (bit-or (w3/buffer-usage :vertex) (w3/buffer-usage :copy-dst))}))
+
+(defn- ensure-inst-buffer!
+  "Grow `inst-buffer` (an atom of {:buf :capacity}) to hold at least `needed`
+  instances, doubling from its current capacity (amortized-growth, same idea
+  as a dynamic array) rather than resizing to the exact count every time an
+  edge case adds one more instance. Destroys the old GPU buffer before
+  replacing it. Returns {:buf <current-or-new buffer> :grew? bool} — callers
+  use `grew?` to force a re-upload even on an otherwise-cached instance list,
+  since a freshly (re)created buffer's contents are undefined until written."
+  [inst-buffer device needed]
+  (let [{:keys [buf capacity]} @inst-buffer]
+    (if (<= needed capacity)
+      {:buf buf :grew? false}
+      (let [capacity' (loop [c (max capacity 1)] (if (>= c needed) c (recur (* c 2))))
+            buf' (mk-inst-buffer device capacity')]
+        (w3/destroy-buffer! buf)
+        (reset! inst-buffer {:buf buf' :capacity capacity'})
+        {:buf buf' :grew? true}))))
 
 (defn- vattr [fmt off loc] #js {:format fmt :offset off :shaderLocation loc})
 (defn- vlayout []   ;; cube(pos+normal, stride 24) + instance(model+color+material, stride 96)
@@ -185,7 +215,7 @@
                                                      :idx-count (.-length i)})))
                                    {} geom-specs)
                    box (:box geos)
-                   inst (w3/create-buffer! device #js {:size (* MAX-INST 96) :usage (bit-or (w3/buffer-usage :vertex) (w3/buffer-usage :copy-dst))})
+                   inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
                    gbuf (w3/create-buffer! device #js {:size 240 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
@@ -208,7 +238,7 @@
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:device device :queue q :ctx ctx :fmt fmt :w w :h h
-                :vbuf (:vbuf box) :ibuf (:ibuf box) :inst inst :gbuf gbuf :idx-count (:idx-count box)
+                :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
@@ -230,9 +260,12 @@
   material — everything [[draw!]] needs that depends ONLY on
   `raw-instances`, nothing on camera/lighting/sky). Factored out so
   `draw!` can cache it across frames when the instance list hasn't
-  changed — see the `:instance-cache` note on [[init!]]."
+  changed — see the `:instance-cache` note on [[init!]]. No count limit here
+  — [[ensure-inst-buffer!]] grows the GPU buffer to fit however many
+  `raw-instances` actually has (ADR-2607100100 M6; this used to silently
+  `take MAX-INST` and drop the rest)."
   [raw-instances]
-  (let [insts (->> raw-instances (take MAX-INST) (sort-by #(name (or (:geo %) :box))) vec)
+  (let [insts (->> raw-instances (sort-by #(name (or (:geo %) :box))) vec)
         geo-groups (loop [parts (partition-by #(or (:geo %) :box) insts), at 0, acc []]
                      (if (empty? parts)
                        acc
@@ -265,8 +298,12 @@
    instance buffer when the cache actually misses — ADR-2607100100's M4
    investigation measured a static scene's per-frame cost scaling with
    instance count purely from this redundant re-sort/re-marshal/re-upload
-   (~36ms/frame at 20k instances), not from any GPU-side rendering limit."
-  [{:keys [device queue ctx w h vbuf ibuf inst gbuf idx-count targets pipelines graph geos instance-cache]} ir]
+   (~36ms/frame at 20k instances), not from any GPU-side rendering limit.
+
+   The GPU instance buffer itself grows (doubling) to fit however many
+   instances the scene actually has — see [[ensure-inst-buffer!]] — rather
+   than silently dropping any past a fixed cap (ADR-2607100100 M6)."
+  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph geos instance-cache]} ir]
   (let [cached (some-> instance-cache deref)
         cache-hit? (and cached (identical? (:instances ir) (:raw-instances cached)))
         {:keys [insts geo-groups cxx czz idata]}
@@ -312,9 +349,12 @@
     ;; light_d = [gamma, shadow-bias-slope, shadow-bias-min, shadow-texel]
     (.set gf (clj->js [(:gamma lt) (:shadow-bias-slope lt) (:shadow-bias-min lt) (:shadow-texel lt)]) 56)
     (w3/write-buffer! queue gbuf 0 gf)
-    ;; only re-upload the GPU instance buffer on a real cache miss — see
-    ;; the :instance-cache note on init! and the draw! docstring.
-    (when-not cache-hit? (w3/write-buffer! queue inst 0 idata))
+    ;; grow the GPU instance buffer first if this frame's instance count
+    ;; exceeds its current capacity (ADR-2607100100 M6) — then only
+    ;; re-upload on a real cache miss OR a just-grown (contents-undefined)
+    ;; buffer. See the :instance-cache note on init! and the draw! docstring.
+    (let [{:keys [buf grew?]} (ensure-inst-buffer! inst-buffer device (count insts))]
+      (when (or (not cache-hit?) grew?) (w3/write-buffer! queue buf 0 idata))
     (let [enc (w3/create-command-encoder! device)
           ninst (count insts)
           screen-view (w3/create-view (w3/current-texture ctx))
@@ -322,7 +362,7 @@
           draw-geom (fn [p pipe bnd]
                       (when (pos? ninst)
                         (w3/set-pipeline! p pipe) (w3/set-bind-group! p 0 bnd)
-                        (w3/set-vertex-buffer! p 1 inst)
+                        (w3/set-vertex-buffer! p 1 buf)
                         ;; one instanced draw per geometry kind, offset into the instance buffer
                         (doseq [[gk gcount gfirst] geo-groups]
                           (let [{gv :vbuf gi :ibuf gn :idx-count} (get geos gk (:box geos))]
@@ -343,4 +383,13 @@
                                                      :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}})]
           (draw-geom rp pipe bind)
           (w3/end-pass! rp)))
-      (w3/submit! queue [(w3/finish! enc)]))))
+      (w3/submit! queue [(w3/finish! enc)])))))
+
+(defn inst-buffer-capacity
+  "How many instances the GPU instance buffer currently has room for
+  (ADR-2607100100 M6) — an observability hook, not just for tests: lets a
+  caller confirm a scene's instance count never silently exceeds what's
+  actually being uploaded/drawn (`draw!` grows this as needed, so in normal
+  use `capacity >= (count (:instances ir))` always holds after a call)."
+  [ctx]
+  (:capacity @(:inst-buffer ctx)))
