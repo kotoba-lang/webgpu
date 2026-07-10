@@ -1,6 +1,7 @@
 ;; babashka task runner for kami-webgpu. The .cljc domain interpreters are the same source
 ;; the web (CLJS) and JVM (here) run. `bb verify` stays inside this CLJ/EDN repo.
-{:paths ["src" "test" "../expr/src"]
+;; kami.wgsl SSoT lives in sibling kotoba-lang/wgsl (ADR-2607102200)
+{:paths ["src" "test" "../expr/src" "../wgsl/src"]
  :tasks
  {
   render-test {:doc "Headless-WebGL2 GPU-2D render: the sprite-SDF pass actually draws (pixel readback)." :task (do (load-file "scripts/gen_glsl.clj") (load-file "test/playwright_render_test.clj") (load-file "test/playwright_anim_test.clj") (load-file "test/playwright_sky_text_test.clj") (load-file "test/playwright_frame_test.clj") (load-file "test/playwright_rect_extent_test.clj"))}
