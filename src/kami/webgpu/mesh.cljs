@@ -115,22 +115,27 @@
     (aset o 0 (/ f aspect)) (aset o 5 f)
     (aset o 10 (* far nf)) (aset o 11 -1.0) (aset o 14 (* far near nf)) o))
 
-(defn- v-sub [a b] [(- (a 0) (b 0)) (- (a 1) (b 1)) (- (a 2) (b 2))])
-(defn- v-cross [a b] [(- (* (a 1) (b 2)) (* (a 2) (b 1)))
-                      (- (* (a 2) (b 0)) (* (a 0) (b 2)))
-                      (- (* (a 0) (b 1)) (* (a 1) (b 0)))])
-(defn- v-norm [a] (let [l (js/Math.hypot (a 0) (a 1) (a 2)) l (if (< l 1e-9) 1.0 l)]
-                    [(/ (a 0) l) (/ (a 1) l) (/ (a 2) l)]))
-(defn- v-dot [a b] (+ (* (a 0) (b 0)) (* (a 1) (b 1)) (* (a 2) (b 2))))
+(defn- v-sub [a b]
+  [(- (nth a 0) (nth b 0)) (- (nth a 1) (nth b 1)) (- (nth a 2) (nth b 2))])
+(defn- v-cross [a b]
+  [(- (* (nth a 1) (nth b 2)) (* (nth a 2) (nth b 1)))
+   (- (* (nth a 2) (nth b 0)) (* (nth a 0) (nth b 2)))
+   (- (* (nth a 0) (nth b 1)) (* (nth a 1) (nth b 0)))])
+(defn- v-norm [a]
+  (let [l (js/Math.hypot (nth a 0) (nth a 1) (nth a 2))
+        l (if (< l 1e-9) 1.0 l)]
+    [(/ (nth a 0) l) (/ (nth a 1) l) (/ (nth a 2) l)]))
+(defn- v-dot [a b]
+  (+ (* (nth a 0) (nth b 0)) (* (nth a 1) (nth b 1)) (* (nth a 2) (nth b 2))))
 
 (defn- look-at [eye center up]
   (let [f (v-norm (v-sub center eye))
         s (v-norm (v-cross f up))
         u (v-cross s f)
         o (m4)]
-    (aset o 0 (s 0)) (aset o 4 (s 1)) (aset o 8 (s 2))
-    (aset o 1 (u 0)) (aset o 5 (u 1)) (aset o 9 (u 2))
-    (aset o 2 (- (f 0))) (aset o 6 (- (f 1))) (aset o 10 (- (f 2)))
+    (aset o 0 (nth s 0)) (aset o 4 (nth s 1)) (aset o 8 (nth s 2))
+    (aset o 1 (nth u 0)) (aset o 5 (nth u 1)) (aset o 9 (nth u 2))
+    (aset o 2 (- (nth f 0))) (aset o 6 (- (nth f 1))) (aset o 10 (- (nth f 2)))
     (aset o 12 (- (v-dot s eye))) (aset o 13 (- (v-dot u eye))) (aset o 14 (v-dot f eye))
     (aset o 15 1.0) o))
 
@@ -267,7 +272,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   call binds, so the shader's unconditional `textureSample` is a no-op
   (`base_color * (1,1,1) = base_color`), achieving backward compatibility
   without a `has_texture` branch in WGSL."
-  [device]
+  [^js device]
   (let [U js/GPUTextureUsage
         tex (.createTexture device #js {:size #js {:width 1 :height 1}
                                          :format "rgba8unorm"
@@ -283,7 +288,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   canvas/frame if desired). Returns the pipeline context (now also carrying
   `:default-texture`/`:default-sampler`, the backward-compat fallback every
   `draw!` call without its own real texture binds)."
-  [device fmt]
+  [^js device fmt]
   (let [mod (.createShaderModule device #js {:code SHADER})
         pipe (.createRenderPipeline device
                #js {:layout "auto"
@@ -307,7 +312,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   output shape) into a real `GPUTexture`. Async (image decode via
   `createImageBitmap`) — returns a `Promise` resolving to the texture;
   callers `.then` before passing it to `draw!`'s `:texture`."
-  [{:keys [device]} {:keys [bytes mime-type]}]
+  [{:keys [^js device]} {:keys [bytes mime-type]}]
   (-> (js/createImageBitmap (js/Blob. #js [(js/Uint8Array. (clj->js (vec bytes)))] #js {:type mime-type}))
       (.then (fn [bitmap]
                (let [w (.-width bitmap) h (.-height bitmap)
@@ -332,7 +337,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   deltas per target, omit for no morphs) -> GPU buffer handles + counts.
   Storage buffers are always allocated (min size, if the mesh has none) since
   WebGPU rejects zero-byte buffers."
-  [{:keys [device]} {:keys [positions normals indices uvs morph-target-deltas joints weights]}]
+  [{:keys [^js device]} {:keys [positions normals indices uvs morph-target-deltas joints weights]}]
   (let [U js/GPUBufferUsage
         vcount (count positions)
         has-skin? (and (seq joints) (seq weights))
@@ -398,14 +403,14 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   byte-identically to before any of this."
   ([ctx pass buffers mvp color morph-weights joint-matrices]
    (draw! ctx pass buffers mvp color morph-weights joint-matrices nil))
-  ([{:keys [device pipe default-texture default-sampler]} pass
+  ([{:keys [^js device ^js pipe default-texture default-sampler]} ^js pass
     {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
             joint-count joint-matrices-buf gbuf]}
     mvp color morph-weights joint-matrices
     {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth]
      :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]
           shade-kind 0 toon-threshold 0.4 toon-smooth 0.08}}]
-   (let [q (.-queue device)
+   (let [^js q (.-queue device)
          ;; 144 bytes / 4 = 36 floats: mvp(16) + color(4) + color_b(4) +
          ;; counts+kind(4, u32 view) + params(4) + shade_kind/toon_threshold/
          ;; toon_smooth/_pad2(4, mixed u32/f32 view).
@@ -424,13 +429,14 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
       (.writeBuffer q morph-weights-buf 0 (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
     (when (pos? joint-count)
       (.writeBuffer q joint-matrices-buf 0 (js/Float32Array. (clj->js (vec (mapcat vec (take joint-count joint-matrices)))))))
-    (let [bind (.createBindGroup device
+    (let [^js texture-view-source (or texture default-texture)
+          bind (.createBindGroup device
                  #js {:layout (.getBindGroupLayout pipe 0)
                       :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}
                                     #js {:binding 1 :resource #js {:buffer morph-deltas-buf}}
                                     #js {:binding 2 :resource #js {:buffer morph-weights-buf}}
                                     #js {:binding 3 :resource #js {:buffer joint-matrices-buf}}
-                                    #js {:binding 4 :resource (.createView (or texture default-texture))}
+                                    #js {:binding 4 :resource (.createView texture-view-source)}
                                     #js {:binding 5 :resource (or sampler default-sampler)}]})]
       (.setPipeline pass pipe)
       (.setBindGroup pass 0 bind)
