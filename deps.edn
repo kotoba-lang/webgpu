@@ -1,7 +1,8 @@
 ;; kami-webgpu — declarative WebGPU from EDN (hiccup for the GPU).
-;; Render-domain modules extracted to sibling packages (ADR-2607102200 addendum 5):
+;; Render-domain modules extracted to sibling packages (ADR-2607102200 addenda 5–6):
 ;;   wgsl, sprite-gpu, sky, shaders, render-shaders, scene2d (incl. kami.text),
-;;   sprite2d (layout). This repo keeps the GPU executors + game harness.
+;;   sprite2d (layout), gpu (pipeline IR), webgl (WebGL2 executor), dance (frame-ir).
+;; This repo keeps the WebGPU executor + game harness (physics/fsm/netsync/…).
 {:paths ["src"]
  :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu"}
          io.github.kotoba-lang/wgsl {:local/root "../wgsl"}
@@ -11,4 +12,7 @@
          io.github.kotoba-lang/sky {:local/root "../sky"}
          io.github.kotoba-lang/shaders {:local/root "../shaders"}
          io.github.kotoba-lang/render-shaders {:local/root "../render-shaders"}
-         io.github.kotoba-lang/scene2d {:local/root "../scene2d"}}}
+         io.github.kotoba-lang/scene2d {:local/root "../scene2d"}
+         io.github.kotoba-lang/gpu {:local/root "../gpu"}
+         io.github.kotoba-lang/webgl {:local/root "../webgl"}
+         io.github.kotoba-lang/dance {:local/root "../dance"}}}
