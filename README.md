@@ -1,3 +1,8 @@
+> **ADR-2607102200 addendum 5:** render-domain modules live in sibling packages
+> (`wgsl`, `sprite-gpu`, `sky`, `shaders`, `render-shaders`, `scene2d`, `sprite2d`).
+> This repo is the WebGPU/WebGL *executor* + harness; `kami.*` namespaces still
+> resolve via those deps.
+
 # kami-webgpu
 
 > 2026-07-02: [kotoba-lang/webgpu-rs](https://github.com/kotoba-lang/webgpu-rs)
