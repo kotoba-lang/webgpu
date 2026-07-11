@@ -93,6 +93,7 @@
    `upload-texture!` returns a Promise of a GPUTexture; callers `.then`
    before passing it to `draw!`."
   (:require [clojure.string :as str]
+            [kami.webgl :as webgl]
             [w3.webgpu :as w3]))
 
 ;; --- minimal camera math (duplicated, not shared, from kami.webgpu — kept
@@ -370,7 +371,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   deltas per target, omit for no morphs) -> GPU buffer handles + counts.
   Storage buffers are always allocated (min size, if the mesh has none) since
   WebGPU rejects zero-byte buffers."
-  [{:keys [device]} {:keys [positions normals indices uvs morph-target-deltas joints weights]}]
+  [{:keys [device] :as context} {:keys [positions normals indices uvs morph-target-deltas joints weights] :as geometry}]
+  (if (= :webgl2 (:backend context))
+    (webgl/upload-mesh! context geometry)
   (let [vcount (count positions)
         has-skin? (and (seq joints) (seq weights))
         has-uv? (seq uvs)
@@ -411,7 +414,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
        :joint-count joint-count :joint-matrices-buf joint-matrices-buf
-       :gbuf gbuf})))
+       :gbuf gbuf}))))
 
 (defn draw!
   "Draw one mesh into `pass` (an already-begun GPURenderPassEncoder, so the
@@ -481,30 +484,30 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 (defn init-canvas!
   "Initialize the canonical WebGPU mesh viewport. The app supplies only an
   HTML canvas; adapter/device/context/raw API ownership stays inside
-  webgpu -> org-w3-webgpu. Returns Promise<context>."
+  webgpu -> org-w3-webgpu. WebGL2 is selected only when WebGPU is absent or
+  adapter/device initialization fails. Returns Promise<context>."
   [canvas]
-  (if-not (w3/supported?)
-    (js/Promise.reject (js/Error. "WebGPU is not available"))
-    (-> (w3/request-adapter!)
-        (.then (fn [adapter]
-                 (if adapter
-                   (w3/request-device! adapter)
-                   (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
-        (.then
-         (fn [device]
-           (let [w (max 1 (.-clientWidth canvas))
-                 h (max 1 (.-clientHeight canvas))
-                 _ (set! (.-width canvas) w)
-                 _ (set! (.-height canvas) h)
-                 ctx (w3/get-context canvas)
-                 fmt (w3/preferred-canvas-format)
-                 depth (w3/create-texture! device
-                         #js {:size #js [w h]
-                              :format "depth24plus"
-                              :usage (w3/texture-usage :render-attachment)})]
-             (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
-             {:device device :queue (w3/device-queue device) :ctx ctx
-              :depth depth :mesh-context (init! device fmt) :width w :height h}))))))
+  (let [fallback (fn []
+                   (if-let [viewport (webgl/init-mesh-viewport! canvas)]
+                     (js/Promise.resolve (assoc viewport :mesh-context viewport))
+                     (js/Promise.reject (js/Error. "Neither WebGPU nor WebGL2 is available"))))]
+    (if-not (w3/supported?)
+      (fallback)
+      (-> (w3/request-adapter!)
+          (.then (fn [adapter]
+                   (if adapter
+                     (w3/request-device! adapter)
+                     (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
+          (.then (fn [device]
+                   (let [w (max 1 (.-clientWidth canvas)) h (max 1 (.-clientHeight canvas))
+                         _ (set! (.-width canvas) w) _ (set! (.-height canvas) h)
+                         ctx (w3/get-context canvas) fmt (w3/preferred-canvas-format)
+                         depth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus"
+                                                               :usage (w3/texture-usage :render-attachment)})]
+                     (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
+                     {:backend :webgpu :device device :queue (w3/device-queue device) :ctx ctx
+                      :depth depth :mesh-context (init! device fmt) :width w :height h})))
+          (.catch (fn [_] (fallback)))))))
 
 (defn render-frame!
   "Render one arbitrary mesh frame through the canonical W3C binding.
@@ -513,7 +516,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
    (render-frame! viewport buffers eye target color nil))
   ([viewport buffers eye target color transform]
   (let [{:keys [device queue ctx depth mesh-context width height]} viewport
-        vp (m4-mul (view-projection eye target (/ width height)) (model-matrix (or transform {})))
+        vp (m4-mul (view-projection eye target (/ width height)) (model-matrix (or transform {})))]
+    (if (= :webgl2 (:backend viewport))
+      (webgl/render-mesh-frame! viewport buffers vp color)
+  (let [
         encoder (w3/create-command-encoder! device)
         pass (w3/begin-render-pass!
               encoder
@@ -527,4 +533,4 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                         :depthClearValue 1}})]
     (draw! mesh-context pass buffers vp color [] [])
     (w3/end-pass! pass)
-    (w3/submit! queue [(w3/finish! encoder)]))))
+    (w3/submit! queue [(w3/finish! encoder)]))))))
