@@ -19,6 +19,12 @@ jobs:
       - name: Checkout kotoba-lang/expr (sibling dep, bb.edn "../expr/src")
         uses: actions/checkout@v4
         with: { repository: kotoba-lang/expr, path: expr }
+      - name: Checkout bb.edn sibling graph
+        run: |
+          for repo in wgsl sprite-gpu sprite2d sky shaders render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
+            git clone --depth 1 "https://github.com/kotoba-lang/${repo}.git" "${repo}"
+          done
+        working-directory: .
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '21' }
       - name: Install babashka
@@ -49,6 +55,12 @@ jobs:
       - name: Checkout kotoba-lang/expr (sibling dep, bb.edn "../expr/src")
         uses: actions/checkout@v4
         with: { repository: kotoba-lang/expr, path: expr }
+      - name: Checkout bb.edn sibling graph
+        run: |
+          for repo in wgsl sprite-gpu sprite2d sky shaders render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
+            git clone --depth 1 "https://github.com/kotoba-lang/${repo}.git" "${repo}"
+          done
+        working-directory: .
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '21' }
       - name: Install babashka

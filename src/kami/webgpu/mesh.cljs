@@ -151,6 +151,31 @@
     (aset o 12 x) (aset o 13 y) (aset o 14 z)
     o))
 
+(defn- scale-matrix [[x y z]]
+  (let [o (m4)]
+    (aset o 0 x) (aset o 5 y) (aset o 10 z) (aset o 15 1) o))
+
+(defn- rotation-x-matrix [angle]
+  (let [o (m4) c (js/Math.cos angle) s (js/Math.sin angle)]
+    (aset o 0 1) (aset o 5 c) (aset o 6 s) (aset o 9 (- s)) (aset o 10 c) (aset o 15 1) o))
+(defn- rotation-y-matrix [angle]
+  (let [o (m4) c (js/Math.cos angle) s (js/Math.sin angle)]
+    (aset o 0 c) (aset o 2 (- s)) (aset o 5 1) (aset o 8 s) (aset o 10 c) (aset o 15 1) o))
+(defn- rotation-z-matrix [angle]
+  (let [o (m4) c (js/Math.cos angle) s (js/Math.sin angle)]
+    (aset o 0 c) (aset o 1 s) (aset o 4 (- s)) (aset o 5 c) (aset o 10 1) (aset o 15 1) o))
+
+(defn model-matrix
+  "Column-major TRS model matrix. Rotation is XYZ Euler radians and scale
+  defaults to identity. Shared here so applications never own GPU matrices."
+  [{:keys [translation rotation scale]
+    :or {translation [0 0 0] rotation [0 0 0] scale [1 1 1]}}]
+  (let [[rx ry rz] rotation]
+    (m4-mul (translation-matrix translation)
+            (m4-mul (rotation-z-matrix rz)
+                    (m4-mul (rotation-y-matrix ry)
+                            (m4-mul (rotation-x-matrix rx) (scale-matrix scale)))))))
+
 ;; --- the shader: morph blend (glTF POSITION-delta convention) then optional
 ;; 4-joint linear-blend skinning, in one vertex stage; flat single-color
 ;; N.L-lit fragment (this is a correctness demo, not a material system) ------
@@ -486,9 +511,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   `viewport` is from `init-canvas!`; `buffers` is from `upload-mesh!`."
   ([viewport buffers eye target color]
    (render-frame! viewport buffers eye target color nil))
-  ([viewport buffers eye target color {:keys [translation] :or {translation [0 0 0]}}]
+  ([viewport buffers eye target color transform]
   (let [{:keys [device queue ctx depth mesh-context width height]} viewport
-        vp (m4-mul (view-projection eye target (/ width height)) (translation-matrix translation))
+        vp (m4-mul (view-projection eye target (/ width height)) (model-matrix (or transform {})))
         encoder (w3/create-command-encoder! device)
         pass (w3/begin-render-pass!
               encoder
