@@ -92,7 +92,8 @@
    works). Texture loading itself is async (`createImageBitmap`) —
    `upload-texture!` returns a Promise of a GPUTexture; callers `.then`
    before passing it to `draw!`."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [w3.webgpu :as w3]))
 
 ;; --- minimal camera math (duplicated, not shared, from kami.webgpu — kept
 ;; private there; a handful of pure functions, not worth coupling two
@@ -272,13 +273,14 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   call binds, so the shader's unconditional `textureSample` is a no-op
   (`base_color * (1,1,1) = base_color`), achieving backward compatibility
   without a `has_texture` branch in WGSL."
-  [^js device]
-  (let [U js/GPUTextureUsage
-        tex (.createTexture device #js {:size #js {:width 1 :height 1}
+  [device]
+  (let [tex (w3/create-texture! device #js {:size #js {:width 1 :height 1}
                                          :format "rgba8unorm"
-                                         :usage (bit-or (.-TEXTURE_BINDING U) (.-COPY_DST U))})]
-    (.writeTexture (.-queue device) #js {:texture tex} (js/Uint8Array. #js [255 255 255 255])
-                   #js {:bytesPerRow 4} #js {:width 1 :height 1})
+                                         :usage (bit-or (w3/texture-usage :texture-binding)
+                                                        (w3/texture-usage :copy-dst))})]
+    (w3/write-texture! (w3/device-queue device) #js {:texture tex}
+                       (js/Uint8Array. #js [255 255 255 255])
+                       #js {:bytesPerRow 4} #js {:width 1 :height 1})
     tex))
 
 (defn init!
@@ -288,9 +290,9 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   canvas/frame if desired). Returns the pipeline context (now also carrying
   `:default-texture`/`:default-sampler`, the backward-compat fallback every
   `draw!` call without its own real texture binds)."
-  [^js device fmt]
-  (let [mod (.createShaderModule device #js {:code SHADER})
-        pipe (.createRenderPipeline device
+  [device fmt]
+  (let [mod (w3/create-shader-module! device #js {:code SHADER})
+        pipe (w3/create-render-pipeline! device
                #js {:layout "auto"
                     :vertex #js {:module mod :entryPoint "vs"
                                  :buffers #js [#js {:arrayStride VERTEX-STRIDE
@@ -305,23 +307,23 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                     :depthStencil #js {:format "depth24plus" :depthWriteEnabled true :depthCompare "less"}})]
     {:device device :pipe pipe
      :default-texture (default-texture! device)
-     :default-sampler (.createSampler device #js {:magFilter "linear" :minFilter "linear"})}))
+     :default-sampler (w3/create-sampler! device #js {:magFilter "linear" :minFilter "linear"})}))
 
 (defn upload-texture!
   "Decode `{:bytes :mime-type}` (`vrm.convert/read-base-color-texture`'s
   output shape) into a real `GPUTexture`. Async (image decode via
   `createImageBitmap`) — returns a `Promise` resolving to the texture;
   callers `.then` before passing it to `draw!`'s `:texture`."
-  [{:keys [^js device]} {:keys [bytes mime-type]}]
+  [{:keys [device]} {:keys [bytes mime-type]}]
   (-> (js/createImageBitmap (js/Blob. #js [(js/Uint8Array. (clj->js (vec bytes)))] #js {:type mime-type}))
       (.then (fn [bitmap]
                (let [w (.-width bitmap) h (.-height bitmap)
-                     U js/GPUTextureUsage
-                     tex (.createTexture device #js {:size #js {:width w :height h}
+                     tex (w3/create-texture! device #js {:size #js {:width w :height h}
                                                       :format "rgba8unorm"
-                                                      :usage (bit-or (.-TEXTURE_BINDING U) (.-COPY_DST U)
-                                                                     (.-RENDER_ATTACHMENT U))})]
-                 (.copyExternalImageToTexture (.-queue device)
+                                                      :usage (bit-or (w3/texture-usage :texture-binding)
+                                                                     (w3/texture-usage :copy-dst)
+                                                                     (w3/texture-usage :render-attachment))})]
+                 (w3/copy-external-image-to-texture! (w3/device-queue device)
                    #js {:source bitmap} #js {:texture tex} #js {:width w :height h})
                  tex)))))
 
@@ -337,9 +339,8 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   deltas per target, omit for no morphs) -> GPU buffer handles + counts.
   Storage buffers are always allocated (min size, if the mesh has none) since
   WebGPU rejects zero-byte buffers."
-  [{:keys [^js device]} {:keys [positions normals indices uvs morph-target-deltas joints weights]}]
-  (let [U js/GPUBufferUsage
-        vcount (count positions)
+  [{:keys [device]} {:keys [positions normals indices uvs morph-target-deltas joints weights]}]
+  (let [vcount (count positions)
         has-skin? (and (seq joints) (seq weights))
         has-uv? (seq uvs)
         interleaved (js/Float32Array. (* vcount (/ VERTEX-STRIDE 4)))
@@ -356,24 +357,26 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
         (.set joints-view (js/Uint32Array. (clj->js (vec j))) (+ base 8))
         (.set interleaved (f32 w) (+ base 12))))
     (let [mkbuf (fn [data usage]
-                  (let [b (.createBuffer device #js {:size (.-byteLength data) :usage (bit-or usage (.-COPY_DST U))})]
-                    (.writeBuffer (.-queue device) b 0 data) b))
-          vbuf (mkbuf interleaved (.-VERTEX U))
-          ibuf (mkbuf (js/Uint32Array. (clj->js (vec indices))) (.-INDEX U))
+                  (let [b (w3/create-buffer! device #js {:size (.-byteLength data)
+                                                        :usage (bit-or usage (w3/buffer-usage :copy-dst))})]
+                    (w3/write-buffer! (w3/device-queue device) b data) b))
+          vbuf (mkbuf interleaved (w3/buffer-usage :vertex))
+          ibuf (mkbuf (js/Uint32Array. (clj->js (vec indices))) (w3/buffer-usage :index))
           morph-count (count morph-target-deltas)
           morph-flat (if (pos? morph-count)
                        (f32 (mapcat (fn [target] (mapcat (fn [d] (conj (vec d) 0.0)) target)) morph-target-deltas))
                        (js/Float32Array. 4))
-          morph-deltas-buf (mkbuf morph-flat (.-STORAGE U))
-          morph-weights-buf (.createBuffer device #js {:size (max 4 (* 4 (max 1 morph-count)))
-                                                        :usage (bit-or (.-STORAGE U) (.-COPY_DST U))})
+          morph-deltas-buf (mkbuf morph-flat (w3/buffer-usage :storage))
+          morph-weights-buf (w3/create-buffer! device #js {:size (max 4 (* 4 (max 1 morph-count)))
+                                                        :usage (bit-or (w3/buffer-usage :storage) (w3/buffer-usage :copy-dst))})
           joint-count (if has-skin? (inc (apply max 0 (mapcat identity joints))) 0)
-          joint-matrices-buf (.createBuffer device #js {:size (max 64 (* 64 (max 1 joint-count)))
-                                                         :usage (bit-or (.-STORAGE U) (.-COPY_DST U))})
+          joint-matrices-buf (w3/create-buffer! device #js {:size (max 64 (* 64 (max 1 joint-count)))
+                                                         :usage (bit-or (w3/buffer-usage :storage) (w3/buffer-usage :copy-dst))})
           ;; 144 bytes: mvp(64) + color(16) + color_b(16) + 4x u32 counts/
           ;; pattern_kind(16) + pattern_params(16) + shade_kind/toon_threshold/
           ;; toon_smooth/_pad2(16) — see `draw!`'s `gdata`.
-          gbuf (.createBuffer device #js {:size 144 :usage (bit-or (.-UNIFORM U) (.-COPY_DST U))})]
+          gbuf (w3/create-buffer! device #js {:size 144 :usage (bit-or (w3/buffer-usage :uniform)
+                                                                       (w3/buffer-usage :copy-dst))})]
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
        :joint-count joint-count :joint-matrices-buf joint-matrices-buf
@@ -403,14 +406,14 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   byte-identically to before any of this."
   ([ctx pass buffers mvp color morph-weights joint-matrices]
    (draw! ctx pass buffers mvp color morph-weights joint-matrices nil))
-  ([{:keys [^js device ^js pipe default-texture default-sampler]} ^js pass
+  ([{:keys [device pipe default-texture default-sampler]} pass
     {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
             joint-count joint-matrices-buf gbuf]}
     mvp color morph-weights joint-matrices
     {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth]
      :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]
           shade-kind 0 toon-threshold 0.4 toon-smooth 0.08}}]
-   (let [^js q (.-queue device)
+   (let [q (w3/device-queue device)
          ;; 144 bytes / 4 = 36 floats: mvp(16) + color(4) + color_b(4) +
          ;; counts+kind(4, u32 view) + params(4) + shade_kind/toon_threshold/
          ;; toon_smooth/_pad2(4, mixed u32/f32 view).
@@ -424,22 +427,71 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
      (.set gdata (f32 params) 28)
      (aset gdata 33 toon-threshold)
      (aset gdata 34 toon-smooth)
-     (.writeBuffer q gbuf 0 gdata)
+     (w3/write-buffer! q gbuf gdata)
     (when (pos? morph-count)
-      (.writeBuffer q morph-weights-buf 0 (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
+      (w3/write-buffer! q morph-weights-buf (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
     (when (pos? joint-count)
-      (.writeBuffer q joint-matrices-buf 0 (js/Float32Array. (clj->js (vec (mapcat vec (take joint-count joint-matrices)))))))
-    (let [^js texture-view-source (or texture default-texture)
-          bind (.createBindGroup device
-                 #js {:layout (.getBindGroupLayout pipe 0)
+      (w3/write-buffer! q joint-matrices-buf (js/Float32Array. (clj->js (vec (mapcat vec (take joint-count joint-matrices)))))))
+    (let [texture-view-source (or texture default-texture)
+          bind (w3/create-bind-group! device
+                 #js {:layout (w3/get-bind-group-layout pipe 0)
                       :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}
                                     #js {:binding 1 :resource #js {:buffer morph-deltas-buf}}
                                     #js {:binding 2 :resource #js {:buffer morph-weights-buf}}
                                     #js {:binding 3 :resource #js {:buffer joint-matrices-buf}}
-                                    #js {:binding 4 :resource (.createView texture-view-source)}
+                                    #js {:binding 4 :resource (w3/create-view texture-view-source)}
                                     #js {:binding 5 :resource (or sampler default-sampler)}]})]
-      (.setPipeline pass pipe)
-      (.setBindGroup pass 0 bind)
-      (.setVertexBuffer pass 0 vbuf)
-      (.setIndexBuffer pass ibuf "uint32")
-      (.drawIndexed pass idx-count)))))
+      (w3/set-pipeline! pass pipe)
+      (w3/set-bind-group! pass 0 bind)
+      (w3/set-vertex-buffer! pass 0 vbuf)
+      (w3/set-index-buffer! pass ibuf "uint32")
+      (w3/draw-indexed! pass idx-count)))))
+
+(defn init-canvas!
+  "Initialize the canonical WebGPU mesh viewport. The app supplies only an
+  HTML canvas; adapter/device/context/raw API ownership stays inside
+  webgpu -> org-w3-webgpu. Returns Promise<context>."
+  [canvas]
+  (if-not (w3/supported?)
+    (js/Promise.reject (js/Error. "WebGPU is not available"))
+    (-> (w3/request-adapter!)
+        (.then (fn [adapter]
+                 (if adapter
+                   (w3/request-device! adapter)
+                   (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
+        (.then
+         (fn [device]
+           (let [w (max 1 (.-clientWidth canvas))
+                 h (max 1 (.-clientHeight canvas))
+                 _ (set! (.-width canvas) w)
+                 _ (set! (.-height canvas) h)
+                 ctx (w3/get-context canvas)
+                 fmt (w3/preferred-canvas-format)
+                 depth (w3/create-texture! device
+                         #js {:size #js [w h]
+                              :format "depth24plus"
+                              :usage (w3/texture-usage :render-attachment)})]
+             (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
+             {:device device :queue (w3/device-queue device) :ctx ctx
+              :depth depth :mesh-context (init! device fmt) :width w :height h}))))))
+
+(defn render-frame!
+  "Render one arbitrary mesh frame through the canonical W3C binding.
+  `viewport` is from `init-canvas!`; `buffers` is from `upload-mesh!`."
+  [viewport buffers eye target color]
+  (let [{:keys [device queue ctx depth mesh-context width height]} viewport
+        vp (view-projection eye target (/ width height))
+        encoder (w3/create-command-encoder! device)
+        pass (w3/begin-render-pass!
+              encoder
+              #js {:colorAttachments
+                   #js [#js {:view (w3/create-view (w3/current-texture ctx))
+                             :loadOp "clear" :storeOp "store"
+                             :clearValue #js {:r 0.035 :g 0.055 :b 0.10 :a 1}}]
+                   :depthStencilAttachment
+                   #js {:view (w3/create-view depth)
+                        :depthLoadOp "clear" :depthStoreOp "store"
+                        :depthClearValue 1}})]
+    (draw! mesh-context pass buffers vp color [] [])
+    (w3/end-pass! pass)
+    (w3/submit! queue [(w3/finish! encoder)])))
