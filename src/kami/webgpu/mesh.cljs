@@ -571,3 +571,24 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
           (draw! mesh-context pass buffers mvp color [] [] material))
         (w3/end-pass! pass)
         (w3/submit! queue [(w3/finish! encoder)])))))
+
+(defn render-skinned-frame!
+  "Render one skinned mesh with an ordered joint matrix palette. WebGPU uses
+  the shader storage palette; WebGL2 delegates to its compatible skin path."
+  ([viewport buffers eye target color joint-matrices]
+   (render-skinned-frame! viewport buffers eye target color joint-matrices nil))
+  ([viewport buffers eye target color joint-matrices transform]
+  (let [{:keys [device queue ctx depth mesh-context width height]} viewport
+        vp (m4-mul (view-projection eye target (/ width height)) (model-matrix (or transform {})))]
+    (if (= :webgl2 (:backend viewport))
+      (webgl/render-skinned-mesh-frame! viewport buffers vp color joint-matrices)
+      (let [encoder (w3/create-command-encoder! device)
+            pass (w3/begin-render-pass!
+                  encoder #js {:colorAttachments #js [#js {:view (w3/create-view (w3/current-texture ctx))
+                                                            :loadOp "clear" :storeOp "store"
+                                                            :clearValue #js {:r 0.035 :g 0.055 :b 0.10 :a 1}}]
+                               :depthStencilAttachment #js {:view (w3/create-view depth) :depthLoadOp "clear"
+                                                           :depthStoreOp "store" :depthClearValue 1}})]
+        (draw! mesh-context pass buffers vp color [] joint-matrices)
+        (w3/end-pass! pass)
+        (w3/submit! queue [(w3/finish! encoder)]))))))
