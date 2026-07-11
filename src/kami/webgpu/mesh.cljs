@@ -145,6 +145,12 @@
   [eye target aspect]
   (m4-mul (perspective (/ js/Math.PI 3.0) aspect 0.05 100.0) (look-at eye target [0 1 0])))
 
+(defn- translation-matrix [[x y z]]
+  (let [o (m4)]
+    (aset o 0 1) (aset o 5 1) (aset o 10 1) (aset o 15 1)
+    (aset o 12 x) (aset o 13 y) (aset o 14 z)
+    o))
+
 ;; --- the shader: morph blend (glTF POSITION-delta convention) then optional
 ;; 4-joint linear-blend skinning, in one vertex stage; flat single-color
 ;; N.L-lit fragment (this is a correctness demo, not a material system) ------
@@ -478,9 +484,11 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 (defn render-frame!
   "Render one arbitrary mesh frame through the canonical W3C binding.
   `viewport` is from `init-canvas!`; `buffers` is from `upload-mesh!`."
-  [viewport buffers eye target color]
+  ([viewport buffers eye target color]
+   (render-frame! viewport buffers eye target color nil))
+  ([viewport buffers eye target color {:keys [translation] :or {translation [0 0 0]}}]
   (let [{:keys [device queue ctx depth mesh-context width height]} viewport
-        vp (view-projection eye target (/ width height))
+        vp (m4-mul (view-projection eye target (/ width height)) (translation-matrix translation))
         encoder (w3/create-command-encoder! device)
         pass (w3/begin-render-pass!
               encoder
@@ -494,4 +502,4 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                         :depthClearValue 1}})]
     (draw! mesh-context pass buffers vp color [] [])
     (w3/end-pass! pass)
-    (w3/submit! queue [(w3/finish! encoder)])))
+    (w3/submit! queue [(w3/finish! encoder)]))))
