@@ -534,3 +534,30 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     (draw! mesh-context pass buffers vp color [] [])
     (w3/end-pass! pass)
     (w3/submit! queue [(w3/finish! encoder)]))))))
+
+(defn render-scene!
+  "Render multiple arbitrary meshes in one frame and one render pass.
+  Each draw is {:buffers upload-result :color [r g b] :transform optional-TRS}.
+  This preserves depth between objects and is shared by WebGPU/WebGL2."
+  [viewport draws eye target]
+  (let [{:keys [device queue ctx depth mesh-context width height]} viewport
+        projection (view-projection eye target (/ width height))
+        prepared (mapv (fn [{:keys [buffers color transform]}]
+                         {:buffers buffers :color color
+                          :mvp (m4-mul projection (model-matrix (or transform {})))}) draws)]
+    (if (= :webgl2 (:backend viewport))
+      (webgl/render-mesh-scene! viewport prepared)
+      (let [encoder (w3/create-command-encoder! device)
+            pass (w3/begin-render-pass!
+                  encoder
+                  #js {:colorAttachments
+                       #js [#js {:view (w3/create-view (w3/current-texture ctx))
+                                 :loadOp "clear" :storeOp "store"
+                                 :clearValue #js {:r 0.035 :g 0.055 :b 0.10 :a 1}}]
+                       :depthStencilAttachment
+                       #js {:view (w3/create-view depth) :depthLoadOp "clear"
+                            :depthStoreOp "store" :depthClearValue 1}})]
+        (doseq [{:keys [buffers color mvp]} prepared]
+          (draw! mesh-context pass buffers mvp color [] []))
+        (w3/end-pass! pass)
+        (w3/submit! queue [(w3/finish! encoder)])))))
