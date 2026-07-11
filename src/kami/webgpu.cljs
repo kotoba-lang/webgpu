@@ -13,6 +13,7 @@
    is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
    The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform)."
   (:require [kami.webgpu.ir :as ir]
+            [kami.webgl :as webgl]
             [kami.shaders :as shaders]
             [w3.webgpu :as w3]))
 
@@ -181,6 +182,15 @@
                           (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
                       binds))}))
 
+(defn- init-webgl-fallback! [canvas opts]
+  (if-let [viewport (webgl/init-mesh-viewport! canvas)]
+    (let [geom-specs (merge ir/default-geometry (:geometry opts))
+          geos (reduce-kv (fn [result kind spec]
+                            (assoc result kind (webgl/upload-mesh! viewport (ir/mesh-from-spec spec))))
+                          {} geom-specs)]
+      (js/Promise.resolve (assoc viewport :geos geos)))
+    (js/Promise.reject (js/Error. "Neither WebGPU nor WebGL2 is available"))))
+
 (defn init!
   "Set up WebGPU on the canvas once from the render graph. Returns a Promise of a context.
    opts (optional): {:graph <render-graph EDN> :geometry <{:geo-kw {:type … params}} EDN>} —
@@ -188,9 +198,11 @@
   ([canvas] (init! canvas nil))
   ([canvas opts]
    (if-not (w3/supported?)
-     (js/Promise.reject "WebGPU not available (use a recent Chrome/Edge)")
+     (init-webgl-fallback! canvas opts)
      (-> (w3/request-adapter!)
-         (.then (fn [adapter] (w3/request-device! adapter)))
+         (.then (fn [adapter]
+                  (if adapter (w3/request-device! adapter)
+                    (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
          (.then
            (fn [device]
              (let [graph (or (:graph opts) default-graph)
@@ -237,7 +249,7 @@
                                    (assoc m k {:pipe pipe :bind (build-bind device pipe gbuf targets samplers (:binds pd))})))
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
-               {:device device :queue q :ctx ctx :fmt fmt :w w :h h
+               {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
@@ -247,7 +259,8 @@
                 ;; marshal-to-Float32Array/GPU-upload work keyed on that reference turns
                 ;; a static scene's per-frame cost from O(instance count) back to O(1).
                 ;; See [[compute-instance-data]]/[[draw!]].
-                :instance-cache (atom nil)})))))))
+                :instance-cache (atom nil)})))
+         (.catch (fn [_] (init-webgl-fallback! canvas opts)))))))
 
 (defn- arr3 [m k d] (or (get m k) d))
 
@@ -284,7 +297,7 @@
         (.set idata (clj->js [(or metallic 0.0) (or roughness 0.65) (or emissive 0.0) 0]) (+ base 20))))
     {:raw-instances raw-instances :insts insts :geo-groups geo-groups :cxx cxx :czz czz :idata idata}))
 
-(defn draw!
+(defn- draw-webgpu!
   "Draw one frame from a render-IR map: {:globals {:sky {:horizon :sun-dir :sun} :eye
    :target} :instances [{:pos :color :size :yaw :metallic :roughness :emissive}]}. Runs
    the graph's :passes in order. Synchronous; no wasm.
@@ -384,6 +397,27 @@
           (draw-geom rp pipe bind)
           (w3/end-pass! rp)))
       (w3/submit! queue [(w3/finish! enc)])))))
+
+(defn- draw-webgl! [{:keys [geos width height] :as viewport} render-ir]
+  (let [instances (:instances render-ir)
+        {:keys [cxx czz]} (compute-instance-data instances)
+        globals (:globals render-ir)
+        eye (arr3 globals :eye [(+ cxx 60) 80 (+ czz 60)])
+        target (arr3 globals :target [cxx 0 czz])
+        fov (or (:fov globals) 60) near (or (:near globals) 0.5) far (or (:far globals) 4000)
+        vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far)
+                   (look-at (vec eye) (vec target) [0 1 0]))
+        draws (mapv (fn [{:keys [pos color size yaw geo]}]
+                      {:buffers (get geos (or geo :box) (:box geos))
+                       :mvp (m4-mul vp (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1)))
+                       :color (or color [0.7 0.75 0.82])}) instances)]
+    (webgl/render-mesh-scene! viewport draws)))
+
+(defn draw!
+  "Draw Render-IR through the backend selected by init!: WebGPU first,
+  WebGL2 fallback. Callers keep one backend-neutral contract."
+  [ctx render-ir]
+  (if (= :webgl2 (:backend ctx)) (draw-webgl! ctx render-ir) (draw-webgpu! ctx render-ir)))
 
 (defn inst-buffer-capacity
   "How many instances the GPU instance buffer currently has room for
