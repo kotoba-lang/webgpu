@@ -195,6 +195,7 @@
   toon_threshold: f32,
   toon_smooth: f32,
   _pad2: u32,
+  material_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -289,12 +290,19 @@ fn toon_lit(ndl: f32) -> f32 {
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   let light_dir = normalize(vec3<f32>(0.4, 0.8, 0.5));
-  let ndl = max(dot(normalize(in.n), light_dir), 0.0);
+  let n = normalize(in.n);
+  let ndl = max(dot(n, light_dir), 0.0);
   let lit = toon_lit(ndl);
   let t = pattern_t(in.local_pos);
   let base_color = mix(u.color.rgb, u.color_b.rgb, t);
   let tex_sample = textureSample(tex, samp, in.uv);
-  return vec4<f32>(base_color * tex_sample.rgb * lit, 1.0);
+  let albedo = base_color * tex_sample.rgb;
+  let metallic = clamp(u.material_params.x, 0.0, 1.0);
+  let roughness = clamp(u.material_params.y, 0.04, 1.0);
+  let half_dir = normalize(light_dir + vec3<f32>(0.0, 0.0, 1.0));
+  let specular = pow(max(dot(n, half_dir), 0.0), mix(128.0, 2.0, roughness)) * ndl;
+  let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+  return vec4<f32>(albedo * lit * (1.0 - metallic * 0.45) + f0 * specular, 1.0);
 }
 ")
 
@@ -406,10 +414,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
           joint-count (if has-skin? (inc (apply max 0 (mapcat identity joints))) 0)
           joint-matrices-buf (w3/create-buffer! device #js {:size (max 64 (* 64 (max 1 joint-count)))
                                                          :usage (bit-or (w3/buffer-usage :storage) (w3/buffer-usage :copy-dst))})
-          ;; 144 bytes: mvp(64) + color(16) + color_b(16) + 4x u32 counts/
+          ;; 160 bytes: existing uniforms plus vec4 material parameters.
           ;; pattern_kind(16) + pattern_params(16) + shade_kind/toon_threshold/
           ;; toon_smooth/_pad2(16) — see `draw!`'s `gdata`.
-          gbuf (w3/create-buffer! device #js {:size 144 :usage (bit-or (w3/buffer-usage :uniform)
+          gbuf (w3/create-buffer! device #js {:size 160 :usage (bit-or (w3/buffer-usage :uniform)
                                                                        (w3/buffer-usage :copy-dst))})]
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
@@ -444,14 +452,14 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
             joint-count joint-matrices-buf gbuf]}
     mvp color morph-weights joint-matrices
-    {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth]
+    {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth metallic roughness]
      :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]
-          shade-kind 0 toon-threshold 0.4 toon-smooth 0.08}}]
+          shade-kind 0 toon-threshold 0.4 toon-smooth 0.08 metallic 0.0 roughness 0.5}}]
    (let [q (w3/device-queue device)
          ;; 144 bytes / 4 = 36 floats: mvp(16) + color(4) + color_b(4) +
          ;; counts+kind(4, u32 view) + params(4) + shade_kind/toon_threshold/
          ;; toon_smooth/_pad2(4, mixed u32/f32 view).
-         gdata (js/Float32Array. 36)]
+         gdata (js/Float32Array. 40)]
      (.set gdata mvp 0)
      (.set gdata (f32 (conj (vec color) 1.0)) 16)
      (.set gdata (f32 (conj (vec color-b) 1.0)) 20)
@@ -461,6 +469,8 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
      (.set gdata (f32 params) 28)
      (aset gdata 33 toon-threshold)
      (aset gdata 34 toon-smooth)
+     (aset gdata 36 metallic)
+     (aset gdata 37 roughness)
      (w3/write-buffer! q gbuf gdata)
     (when (pos? morph-count)
       (w3/write-buffer! q morph-weights-buf (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
@@ -542,8 +552,8 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   [viewport draws eye target]
   (let [{:keys [device queue ctx depth mesh-context width height]} viewport
         projection (view-projection eye target (/ width height))
-        prepared (mapv (fn [{:keys [buffers color transform]}]
-                         {:buffers buffers :color color
+        prepared (mapv (fn [{:keys [buffers color transform material]}]
+                         {:buffers buffers :color color :material material
                           :mvp (m4-mul projection (model-matrix (or transform {})))}) draws)]
     (if (= :webgl2 (:backend viewport))
       (webgl/render-mesh-scene! viewport prepared)
@@ -557,7 +567,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                        :depthStencilAttachment
                        #js {:view (w3/create-view depth) :depthLoadOp "clear"
                             :depthStoreOp "store" :depthClearValue 1}})]
-        (doseq [{:keys [buffers color mvp]} prepared]
-          (draw! mesh-context pass buffers mvp color [] []))
+        (doseq [{:keys [buffers color mvp material]} prepared]
+          (draw! mesh-context pass buffers mvp color [] [] material))
         (w3/end-pass! pass)
         (w3/submit! queue [(w3/finish! encoder)])))))
