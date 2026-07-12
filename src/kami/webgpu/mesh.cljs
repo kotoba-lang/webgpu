@@ -93,7 +93,7 @@
    `upload-texture!` returns a Promise of a GPUTexture; callers `.then`
    before passing it to `draw!`."
   (:require [clojure.string :as str]
-            [kami.webgl :as webgl]
+            [kotoba.webgl :as webgl]
             [w3.webgpu :as w3]))
 
 ;; --- minimal camera math (duplicated, not shared, from kami.webgpu — kept
