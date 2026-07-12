@@ -32,10 +32,26 @@
     o))
 (defn- m4-mulN [& ms] (reduce m4-mul ms))
 
-(defn- perspective [fovy aspect near far]
-  (let [f (/ 1.0 (js/Math.tan (/ fovy 2.0))) nf (/ 1.0 (- near far)) o (m4)]
-    (aset o 0 (/ f aspect)) (aset o 5 f)
-    (aset o 10 (* far nf)) (aset o 11 -1.0) (aset o 14 (* far near nf)) o))
+;; Kaizen (net-babiniku co-scientist round 67): `zero-to-one?` (default true, so every
+;; existing WebGPU call site is unaffected) selects the clip-space depth convention --
+;; WebGPU/D3D want z/w in [0,1] (the original, only-ever-tested behavior here); native
+;; WebGL wants the classic OpenGL [-1,1] NDC range. `draw-webgl!` below was calling this
+;; SAME fn (0..1 output) and feeding it straight into `gl_Position`, which WebGL's fixed-
+;; function clip/viewport/depth-buffer stages always interpret as [-1,1] -- squeezing
+;; every object into the back half of the depth range and depth-buffer/near-far behavior
+;; that's subtly wrong even where it doesn't outright clip. Found investigating why the
+;; WebGL2 fallback's placeholder box render loop (round 66, US-129) put zero pixels on
+;; screen. o[10]/o[14] are the only two coefficients that differ between the conventions;
+;; everything else (FOV, aspect, o[11]'s perspective-divide setup) is convention-neutral.
+(defn- perspective
+  ([fovy aspect near far] (perspective fovy aspect near far true))
+  ([fovy aspect near far zero-to-one?]
+   (let [f (/ 1.0 (js/Math.tan (/ fovy 2.0))) nf (/ 1.0 (- near far)) o (m4)]
+     (aset o 0 (/ f aspect)) (aset o 5 f)
+     (if zero-to-one?
+       (do (aset o 10 (* far nf)) (aset o 14 (* far near nf)))
+       (do (aset o 10 (* (+ far near) nf)) (aset o 14 (* 2.0 (* far near) nf))))
+     (aset o 11 -1.0) o)))
 
 (defn- ortho [l r b t near far]                ;; RH, depth 0..1 (wgpu) — for the sun
   (let [o (m4)]
@@ -405,7 +421,9 @@
         eye (arr3 globals :eye [(+ cxx 60) 80 (+ czz 60)])
         target (arr3 globals :target [cxx 0 czz])
         fov (or (:fov globals) 60) near (or (:near globals) 0.5) far (or (:far globals) 4000)
-        vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far)
+        ;; false: WebGL's [-1,1] NDC depth convention, not WebGPU's [0,1] -- see perspective's
+        ;; own docstring/comment above for why this differs from draw-webgpu!'s call below.
+        vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far false)
                    (look-at (vec eye) (vec target) [0 1 0]))
         draws (mapv (fn [{:keys [pos color size yaw geo]}]
                       {:buffers (get geos (or geo :box) (:box geos))
