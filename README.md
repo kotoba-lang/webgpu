@@ -113,7 +113,11 @@ In network-isekai a game authors the same data in `scene.edn` as `:render/lighti
 
 ## Status
 
-Renders instanced, lit cuboids with a follow/overview camera (proven live in Chrome
-via WebGPU). Shadow-mapped, PBR, with the **lighting model, sun frustum, camera, and
+Renders instanced, lit geometry with a follow/overview camera, proven live in
+Chrome through both WebGPU-first and forced WebGL2 fallback. Static WebGL2
+render-IR now retains the computed matrix/draw batch so the fallback does not
+rebuild 20,000 transforms each frame. The modeler E2E verifies 20,000 sphere
+instances / 11.2 million resident triangles in one draw on both backends.
+Shadow-mapped, PBR, with the **lighting model, sun frustum, camera, and
 geometry library all data-driven** (see "Authoring the look"). Roadmap:
 EDN-authored post-FX passes, pipelines, and WGSL.
