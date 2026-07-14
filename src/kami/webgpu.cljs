@@ -204,7 +204,7 @@
           geos (reduce-kv (fn [result kind spec]
                             (assoc result kind (webgl/upload-mesh! viewport (ir/mesh-from-spec spec))))
                           {} geom-specs)]
-      (js/Promise.resolve (assoc viewport :geos geos)))
+      (js/Promise.resolve (assoc viewport :geos geos :instance-cache (atom nil))))
     (js/Promise.reject (js/Error. "Neither WebGPU nor WebGL2 is available"))))
 
 (defn init!
@@ -414,21 +414,26 @@
           (w3/end-pass! rp)))
       (w3/submit! queue [(w3/finish! enc)])))))
 
-(defn- draw-webgl! [{:keys [geos width height] :as viewport} render-ir]
+(defn- draw-webgl! [{:keys [geos width height instance-cache] :as viewport} render-ir]
   (let [instances (:instances render-ir)
-        {:keys [cxx czz]} (compute-instance-data instances)
-        globals (:globals render-ir)
-        eye (arr3 globals :eye [(+ cxx 60) 80 (+ czz 60)])
-        target (arr3 globals :target [cxx 0 czz])
-        fov (or (:fov globals) 60) near (or (:near globals) 0.5) far (or (:far globals) 4000)
-        ;; false: WebGL's [-1,1] NDC depth convention, not WebGPU's [0,1] -- see perspective's
-        ;; own docstring/comment above for why this differs from draw-webgpu!'s call below.
-        vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far false)
-                   (look-at (vec eye) (vec target) [0 1 0]))
-        draws (mapv (fn [{:keys [pos color size yaw geo]}]
-                      {:buffers (get geos (or geo :box) (:box geos))
-                       :mvp (m4-mul vp (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1)))
-                       :color (or color [0.7 0.75 0.82])}) instances)]
+        cached @instance-cache
+        cache-hit? (and cached (identical? instances (:instances cached))
+                        (= (:globals render-ir) (:globals cached)))
+        computed (if cache-hit? cached
+                   (let [{:keys [cxx czz]} (compute-instance-data instances)
+                         globals (:globals render-ir)
+                         eye (arr3 globals :eye [(+ cxx 60) 80 (+ czz 60)])
+                         target (arr3 globals :target [cxx 0 czz])
+                         fov (or (:fov globals) 60) near (or (:near globals) 0.5) far (or (:far globals) 4000)
+                         vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far false)
+                                    (look-at (vec eye) (vec target) [0 1 0]))
+                         draws (mapv (fn [{:keys [pos color size yaw geo]}]
+                                       {:buffers (get geos (or geo :box) (:box geos))
+                                        :mvp (m4-mul vp (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1)))
+                                        :color (or color [0.7 0.75 0.82])}) instances)]
+                     {:instances instances :globals (:globals render-ir) :draws draws}))
+        _ (when-not cache-hit? (reset! instance-cache computed))
+        draws (:draws computed)]
     (webgl/render-mesh-scene! viewport draws)))
 
 (defn draw!
