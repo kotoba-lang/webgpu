@@ -6,6 +6,11 @@ WebGPU (web + native), WebGL2 (web fallback), Metal/Vulkan/DX12 (native via wgpu
 (vendor WGSL transpile). **Canvas2D is not a target** — its immediate-mode model diverges from the GPU
 pipeline; 2D is GPU instanced quads.
 
+3D instances express dimensions as `:size [width height depth]`. The legacy two-value
+form `[width height]` normalizes to `[width height width]`, preserving the original square
+x/z footprint. WebGPU packing and WebGL2 model matrices consume this same rule. Independent
+depth uses the existing model matrix z-scale and does not change the 28-float instance stride.
+
 ## Layers (all `.cljc`/`.clj`, browser + JVM/bb)
 
 | ns | role |

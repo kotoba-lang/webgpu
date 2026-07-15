@@ -84,13 +84,13 @@
     (aset o 12 (- (v-dot s eye))) (aset o 13 (- (v-dot u eye))) (aset o 14 (v-dot f eye))
     (aset o 15 1.0) o))
 
-(defn- model-mat [[x y z] yaw w h]
-  ;; translate(pos + up*h/2) * rotateY(yaw) * scale(w,h,w)
+(defn- model-mat [[x y z] yaw w h d]
+  ;; translate(pos + up*h/2) * rotateY(yaw) * scale(w,h,d)
   (let [c (js/Math.cos yaw) s (js/Math.sin yaw)
         t (doto (m4) (aset 0 1)(aset 5 1)(aset 10 1)(aset 15 1)
                      (aset 12 x)(aset 13 (+ y (* h 0.5)))(aset 14 z))
         r (doto (m4) (aset 0 c)(aset 2 (- s))(aset 5 1)(aset 8 s)(aset 10 c)(aset 15 1))
-        sc (doto (m4) (aset 0 w)(aset 5 h)(aset 10 w)(aset 15 1))]
+        sc (doto (m4) (aset 0 w)(aset 5 h)(aset 10 d)(aset 15 1))]
     (m4-mulN t r sc)))
 
 ;; --- mesh buffers from the shared geometry source ----------------------------
@@ -110,7 +110,7 @@
      (js/Uint16Array. (clj->js (vec indices)))]))
 
 ;; The :geo mesh kinds are DATA now (kami.webgpu.ir/default-geometry); the executor bakes each
-;; spec with ir/mesh-from-spec at init!. Unit meshes sized to the [w h] footprint the model
+;; spec with ir/mesh-from-spec at init!. Unit meshes sized to the [w h d] volume the model
 ;; matrix scales (±0.5 like the cube). Pass {:geometry {…}} to init! to add/override a kind.
 
 ;; --- shaders (WGSL is data: referenced by the render graph) -------------------
@@ -539,14 +539,15 @@
   matrices, two matrix multiplies, and two clj->js arrays per instance."
   [idata i {:keys [pos color size yaw metallic roughness emissive textured? texture-layer uv-transform]}]
   (let [[x y z] pos
-        [w h] (or size [1 1])
+        [w h d] (ir/instance-size size)
         yaw (or yaw 0)
         c (js/Math.cos yaw)
         s (js/Math.sin yaw)
         [uv-scale-u uv-scale-v uv-offset-u uv-offset-v]
         (render-instance/normalize-uv-transform uv-transform)
         base (* i INST-FLOATS)]
-    ;; column-major translate(pos + up*h/2) * rotateY(yaw) * scale(w,h,w)
+    ;; column-major translate(pos + up*h/2) * rotateY(yaw) * scale(w,h,d).
+    ;; The existing 16-float model matrix carries z scale, so no ABI/stride change.
     (aset idata base (* c w))
     (aset idata (+ base 1) 0)
     (aset idata (+ base 2) (* (- s) w))
@@ -555,9 +556,9 @@
     (aset idata (+ base 5) h)
     (aset idata (+ base 6) 0)
     (aset idata (+ base 7) 0)
-    (aset idata (+ base 8) (* s w))
+    (aset idata (+ base 8) (* s d))
     (aset idata (+ base 9) 0)
-    (aset idata (+ base 10) (* c w))
+    (aset idata (+ base 10) (* c d))
     (aset idata (+ base 11) 0)
     (aset idata (+ base 12) x)
     (aset idata (+ base 13) (+ y (* h 0.5)))
@@ -865,9 +866,10 @@
                          vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far false)
                                     (look-at (vec eye) (vec target) [0 1 0]))
                          draws (mapv (fn [{:keys [pos color size yaw geo]}]
-                                       {:buffers (get geos (or geo :box) (:box geos))
-                                        :mvp (m4-mul vp (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1)))
-                                        :color (or color [0.7 0.75 0.82])}) instances)]
+                                       (let [[w h d] (ir/instance-size size)]
+                                         {:buffers (get geos (or geo :box) (:box geos))
+                                          :mvp (m4-mul vp (model-mat pos (or yaw 0) w h d))
+                                          :color (or color [0.7 0.75 0.82])})) instances)]
                      {:instances instances :globals (:globals render-ir) :draws draws}))
         _ (when-not cache-hit? (reset! instance-cache computed))
         draws (:draws computed)]

@@ -119,6 +119,12 @@ defaults, which reproduce the original render byte-for-byte (pinned by `test/ren
 In network-isekai a game authors the same data in `scene.edn` as `:render/lighting`,
 `:render/shadow`, `:render/camera`; `isekai.render-ir/scene->globals` threads it through.
 
+Instance dimensions use `:size [width height depth]`, so a road, wall, or vehicle can
+have an independent z footprint. Existing `:size [width height]` data remains compatible:
+the renderer interprets it as `[width height width]`. Both WebGPU and the WebGL2 fallback
+apply the same normalization. Depth occupies the model matrix's existing z-scale slot;
+the 28-float/112-byte instance ABI is unchanged.
+
 ## Status
 
 Renders instanced, lit geometry with a follow/overview camera, proven live in

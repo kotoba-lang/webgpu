@@ -61,7 +61,20 @@
   (is (= (geom/box 1 1 1)        (ir/mesh-from-spec (:box ir/default-geometry))))
   (is (= (geom/sphere 0.5 14 20) (ir/mesh-from-spec (:sphere ir/default-geometry))))
   (is (= (geom/cylinder 0.5 1 20)(ir/mesh-from-spec (:cylinder ir/default-geometry))))
-  (is (= #{:box :sphere :cylinder} (set (keys ir/default-geometry)))))
+  (is (= #{:box :sphere :sphere-lod1 :cylinder :cylinder-lod1
+           :stepped-tower :stepped-tower-lod1 :stepped-tower-lod2
+           :industrial-block :industrial-block-lod1 :industrial-block-lod2}
+         (set (keys ir/default-geometry)))))
+
+(deftest procedural-building-specs-enter-the-existing-geometry-contract
+  (doseq [kind [:stepped-tower :stepped-tower-lod1 :stepped-tower-lod2
+                :industrial-block :industrial-block-lod1 :industrial-block-lod2]]
+    (let [{:keys [positions normals uvs indices]}
+          (ir/mesh-from-spec (get ir/default-geometry kind))]
+      (is (seq positions) (str kind))
+      (is (= (count positions) (count normals)) (str kind))
+      (is (= (count positions) (count uvs)) (str kind))
+      (is (every? #(< % (count positions)) indices) (str kind)))))
 
 (deftest mesh-from-spec-honours-custom-params-and-new-kinds
   ;; retessellate: more sectors → more verts than the default sphere
@@ -102,6 +115,13 @@
     ;; a default frame (no look authored) stays valid and bare — the executor fills the look:
     (is (ir/valid? base))
     (is (nil? (get-in base [:globals :lighting])) "omitted = nil; executor merges defaults")))
+
+(deftest instance-size-supports-non-square-footprints-with-legacy-parity
+  (is (= [4 2 7] (ir/instance-size [4 2 7]))
+      "three-axis size preserves independent z depth")
+  (is (= [4 2 4] (ir/instance-size [4 2]))
+      "legacy width/height keeps its historical square x/z footprint")
+  (is (= [1 1 1] (ir/instance-size nil))))
 
 (deftest uniform-float-layout-is-stable
   ;; The executor packs vp(16) sun_dir(4) sun_col(4) sky(4) light_vp(16) light_a/b/c/d(16)

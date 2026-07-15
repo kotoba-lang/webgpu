@@ -1,6 +1,7 @@
 (ns kami.webgpu.quality
   "Adapter from `:kotoba.render/quality-v1` plans to the capabilities currently
-   implemented by the browser WebGPU executor. Pure data; no JS API calls.")
+   implemented by the browser WebGPU executor. Pure data; no JS API calls."
+  (:require [kami.webgpu.ir :as ir]))
 
 (def capabilities
   {:backend :webgpu
@@ -22,7 +23,13 @@
   {:sphere [{:geo :sphere :min-pixels 36.0}
             {:geo :sphere-lod1 :min-pixels 0.0}]
    :cylinder [{:geo :cylinder :min-pixels 30.0}
-              {:geo :cylinder-lod1 :min-pixels 0.0}]})
+              {:geo :cylinder-lod1 :min-pixels 0.0}]
+   :stepped-tower [{:geo :stepped-tower :min-pixels 96.0}
+                   {:geo :stepped-tower-lod1 :min-pixels 32.0}
+                   {:geo :stepped-tower-lod2 :min-pixels 0.0}]
+   :industrial-block [{:geo :industrial-block :min-pixels 96.0}
+                      {:geo :industrial-block-lod1 :min-pixels 32.0}
+                      {:geo :industrial-block-lod2 :min-pixels 0.0}]})
 
 (defn projected-radius-px
   "Projected pixel radius for an instance bounding sphere."
@@ -69,8 +76,8 @@
                        [ex ey ez] eye
                        distance (#?(:clj Math/sqrt :cljs js/Math.sqrt)
                                  (+ (* (- x ex) (- x ex)) (* (- y ey) (- y ey)) (* (- z ez) (- z ez))))
-                       [width height] (or (:size instance) [1.0 1.0])
-                       radius (* 0.5 (max width height))
+                       [width height depth] (ir/instance-size (:size instance))
+                       radius (* 0.5 (max width height depth))
                        pixels (* (or bias 1.0)
                                  (projected-radius-px radius distance fov-radians viewport-height))
                        previous (get state key (:geo instance))

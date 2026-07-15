@@ -16,7 +16,8 @@
                   :target [x y z]}                ;;   else an overview is derived)
       :instances [{:pos   [x y z]                 ;; world position (ground at y)
                    :color [r g b]                 ;; albedo
-                   :size  [w h]                   ;; footprint w (x,z) × height h
+                   :size  [w h d]                 ;; width × height × depth
+                                                  ;; legacy [w h] means depth=w
                    :yaw   theta                    ;; rotation about Y (radians)
                    :metallic m :roughness r :emissive e
                    :textured? true}]} ;; sample bound albedo/normal/MR textures
@@ -30,7 +31,8 @@
    it over the wire, fork it. Future keys (:passes, :pipelines, :materials, WGSL as
    EDN) extend the same map without changing the contract — the executor reads what
    it understands and ignores the rest."
-  (:require [kami.webgpu.geometry :as geom]))
+  (:require [kami.webgpu.geometry :as geom]
+            [kotoba.render.building :as building]))
 
 (defn material
   "A PBR material — pure data. metallic 0=dielectric…1=metal; roughness 0=mirror…1=matte;
@@ -95,27 +97,53 @@
    :sphere   {:type :sphere   :r 0.5 :rings 14 :sectors 20}
    :sphere-lod1 {:type :sphere :r 0.5 :rings 6 :sectors 10}
    :cylinder {:type :cylinder :r 0.5 :h 1 :sectors 20}
-   :cylinder-lod1 {:type :cylinder :r 0.5 :h 1 :sectors 8}})
+   :cylinder-lod1 {:type :cylinder :r 0.5 :h 1 :sectors 8}
+   :stepped-tower {:type :building :variant :stepped-tower :detail :high :seed 17}
+   :stepped-tower-lod1 {:type :building :variant :stepped-tower :detail :medium :seed 17}
+   :stepped-tower-lod2 {:type :building :variant :stepped-tower :detail :low :seed 17}
+   :industrial-block {:type :building :variant :industrial-block :detail :high :seed 29}
+   :industrial-block-lod1 {:type :building :variant :industrial-block :detail :medium :seed 29}
+   :industrial-block-lod2 {:type :building :variant :industrial-block :detail :low :seed 29}})
+
+(defn- building-geometry [{:keys [variant detail seed]}]
+  (let [[positions normals uvs indices]
+        (building/building-mesh {:variant variant :width 1.0 :depth 1.0
+                                 :height 1.0 :seed (or seed 0)}
+                                (or detail :high))]
+    {:positions (mapv vec (partition 3 positions))
+     :normals (mapv vec (partition 3 normals))
+     :uvs (mapv vec (partition 2 uvs))
+     :indices indices}))
 
 (defn mesh-from-spec
   "Bake one geometry spec → a mesh {:positions :normals :indices}. Pure + cross-platform
    (a native executor reimplements this dispatch over the same data). Unknown :type → unit box."
-  [{:keys [type size r rings sectors h w d]}]
+  [{:keys [type size r rings sectors h w d] :as spec}]
   (case type
     :box      (let [s (or size [1 1 1])] (geom/box (nth s 0) (nth s 1) (nth s 2)))
     :sphere   (geom/sphere (or r 0.5) (or rings 14) (or sectors 20))
     :cylinder (geom/cylinder (or r 0.5) (or h 1) (or sectors 20))
     :plane    (geom/plane (or w 10) (or d 10))
+    :building (building-geometry spec)
     (geom/box 1 1 1)))
 
 (defn instance
-  "An instanced cuboid. Pure data. Merge a `material` map in for PBR."
+  "An instanced cuboid. `size` is `[width height depth]`; legacy `[w h]`
+   remains supported and means `[w h w]`. Pure data. Merge a `material` map in
+   for PBR."
   [pos color size & {:keys [yaw metallic roughness emissive textured?] :or {yaw 0}}]
   (cond-> {:pos pos :color color :size size :yaw yaw}
     metallic  (assoc :metallic metallic)
     roughness (assoc :roughness roughness)
     emissive  (assoc :emissive emissive)
     textured? (assoc :textured? true)))
+
+(defn instance-size
+  "Normalize an instance size to `[width height depth]`. The historical two-axis
+   form described a square x/z footprint, so `[w h]` expands to `[w h w]`."
+  [size]
+  (let [[width height depth] (or size [1 1 1])]
+    [(or width 1) (or height 1) (or depth width 1)]))
 
 (defn sky
   [horizon sun-dir sun]
