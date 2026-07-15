@@ -23,6 +23,10 @@
     (is (= [:bloom :tone-map] (get-in resolved [:effective :post-process])))
     (is (= (:lod plan) (get-in resolved [:effective :lod])))))
 
+(deftest advertises-implemented-pbr-texture-path
+  (is (every? (:pbr quality/capabilities)
+              [:base-color-texture :normal-map :metallic-roughness-texture])))
+
 (deftest rejects-unversioned-data
   (is (thrown-with-msg? Exception #"unsupported render-quality schema"
                         (quality/resolve-plan graph {:shadow {}}))))

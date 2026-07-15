@@ -4,7 +4,8 @@
 
 (def capabilities
   {:backend :webgpu
-   :pbr #{:base-color :metallic :roughness :emissive}
+   :pbr #{:base-color :base-color-texture :metallic :roughness
+          :metallic-roughness-texture :normal-map :emissive}
    :shadow {:directional true :max-cascades 4 :max-resolution 4096 :pcf-radius 1}
    :post-process #{:tone-map :bloom}
    :lod #{:consumer-culling :instance-budget :triangle-budget}})

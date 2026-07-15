@@ -18,6 +18,7 @@
   (let [x (/ w 2.0) z (/ d 2.0)]
     {:positions [[(- x) 0 z] [x 0 z] [x 0 (- z)] [(- x) 0 (- z)]]
      :normals   (vec (repeat 4 [0 1 0]))
+     :uvs       [[0 0] [1 0] [1 1] [0 1]]
      :indices   [0 1 2 0 2 3]}))
 
 (defn box
@@ -32,7 +33,7 @@
                [[0 -1 0] [[(- x) (- y) (- z)] [x (- y) (- z)] [x (- y) z] [(- x) (- y) z]]]]]
     (loop [fs faces, pos [], nor [], idx [], base 0]
       (if (empty? fs)
-        {:positions pos :normals nor :indices idx}
+        {:positions pos :normals nor :uvs (vec (take (count pos) (cycle [[0 0] [1 0] [1 1] [0 1]]))) :indices idx}
         (let [[n corners] (first fs)]
           (recur (rest fs)
                  (into pos corners)
@@ -51,11 +52,12 @@
         grid (for [i (range (inc rings)) j (range (inc sectors))] [i j])
         nor  (vec (map (fn [[i j]] (unit i j)) grid))
         pos  (mapv (fn [n] (mapv #(* r %) n)) nor)
+        uvs  (vec (map (fn [[i j]] [(/ (double j) sectors) (/ (double i) rings)]) grid))
         idx  (vec (mapcat (fn [[i j]]
                             (let [a (+ (* i stride) j) b (+ a stride)]
                               [a (inc a) (inc b) a (inc b) b]))
                           (for [i (range rings) j (range sectors)] [i j])))]
-    {:positions pos :normals nor :indices idx}))
+    {:positions pos :normals nor :uvs uvs :indices idx}))
 
 (defn cylinder
   "A cylinder of radius r, height h (axis y, centred), `sectors` around — side wall + two caps."
@@ -69,6 +71,8 @@
         side-nor (vec (mapcat (fn [[x _ z]] (let [m (max 1e-6 (Math/sqrt (+ (* x x) (* z z))))]
                                               [[(/ x m) 0 (/ z m)] [(/ x m) 0 (/ z m)]]))
                               top))
+        side-uv (vec (mapcat (fn [j] (let [u (/ (double j) sectors)] [[u 0] [u 1]]))
+                             (range (inc sectors))))
         side-idx (vec (mapcat (fn [j] (let [a (* 2 j) b (+ a 1) c (+ a 2) d (+ a 3)]
                                         [a b d a d c]))
                              (range sectors)))
@@ -79,15 +83,19 @@
                     ring-v (vec (ring y))
                     pos (into [centre] ring-v)
                     nor (vec (repeat (count pos) ny))
+                    uv (into [[0.5 0.5]]
+                             (map (fn [[x _ z]] [(+ 0.5 (/ x (* 2 r)))
+                                                  (+ 0.5 (/ z (* 2 r)))]) ring-v))
                     idx (vec (mapcat (fn [j] (if (pos? dir)
                                                [base (+ base 1 j) (+ base 2 j)]
                                                [base (+ base 2 j) (+ base 1 j)]))
                                     (range sectors)))]
-                [pos nor idx]))
-        [tp tn ti] (cap hy [0 1 0] 1 nv)
-        [bp bn bi] (cap (- hy) [0 -1 0] -1 (+ nv (count tp)))]
+                [pos nor uv idx]))
+        [tp tn tu ti] (cap hy [0 1 0] 1 nv)
+        [bp bn bu bi] (cap (- hy) [0 -1 0] -1 (+ nv (count tp)))]
     {:positions (into (into side-pos tp) bp)
      :normals   (into (into side-nor tn) bn)
+     :uvs       (into (into side-uv tu) bu)
      :indices   (into (into side-idx ti) bi)}))
 
 (defn tri-count

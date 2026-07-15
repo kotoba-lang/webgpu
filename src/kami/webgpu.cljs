@@ -15,6 +15,8 @@
   (:require [kami.webgpu.ir :as ir]
             [kami.webgpu.quality :as quality]
             [kotoba.webgl :as webgl]
+            [kotoba.render.mesh :as render-mesh]
+            [kotoba.render.texture :as render-texture]
             [kotoba.shaders :as shaders]
             [w3.webgpu :as w3]))
 
@@ -93,11 +95,16 @@
 ;; source the native renderer also matches — and only interleaved into GPU buffers here.
 
 (defn- mesh->buffers
-  "Interleave a geometry mesh {:positions :normals :indices} into the renderer's vertex format
-   (pos.xyz + normal.xyz, stride 24) and a uint16 index buffer."
-  [{:keys [positions normals indices]}]
-  [(js/Float32Array. (clj->js (vec (mapcat into positions normals))))
-   (js/Uint16Array. (clj->js (vec indices)))])
+  "Interleave position, normal, UV and common-repo generated tangent into the
+   PBR vertex format (48 bytes) plus a uint16 index buffer."
+  [{:keys [positions normals uvs indices]}]
+  (let [flat-pos (vec (mapcat identity positions))
+        flat-normal (vec (mapcat identity normals))
+        flat-uv (vec (mapcat identity uvs))
+        tangents (render-mesh/compute-tangents flat-pos flat-normal flat-uv indices)]
+    [(js/Float32Array.
+      (clj->js (render-mesh/interleave-with-tangents flat-pos flat-normal flat-uv tangents)))
+     (js/Uint16Array. (clj->js (vec indices)))]))
 
 ;; The :geo mesh kinds are DATA now (kami.webgpu.ir/default-geometry); the executor bakes each
 ;; spec with ir/mesh-from-spec at init!. Unit meshes sized to the [w h] footprint the model
@@ -111,7 +118,7 @@
 ;; uniform + shadow-map bindings, the PCF shadow fn, the VO varyings, the vertex and the fragment.
 ;; A bb token-equivalence gate (test/shader_test.clj) pins the generated WGSL to the on-screen-
 ;; verified original — identical token stream; only redundant grouping parens differ (always valid).
-(def SHADER (shaders/cascaded-hdr-shader))
+(def SHADER (shaders/cascaded-textured-hdr-shader))
 
 ;; depth-only shadow pass: render instances from the sun's POV into the shadow map.
 ;; the depth-only shadow pass — also generated from data (kami.shaders/shadow-shader).
@@ -130,7 +137,7 @@
    depth into the :shadow target, then the main pass draws to the screen sampling it.
    Reorder/add passes, swap shaders, or retarget by editing this map (or pass {:graph ...}
    to init!). Each pipeline's :binds wires its group-0 resources by name."
-  {:shaders   {:lit SHADER :lit-direct (shaders/cascaded-lit-shader)
+  {:shaders   {:lit SHADER :lit-direct (shaders/cascaded-textured-lit-shader)
                :bloom (shaders/bloom-shader)
                :composite (shaders/hdr-composite-shader)
                :depth0 (shaders/cascaded-shadow-shader 0)
@@ -144,7 +151,9 @@
                :hdr {:color HDR-FORMAT :scale 0.5}
                :bloom {:color HDR-FORMAT :scale 0.25}}
    :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}
-               :linear {:magFilter "linear" :minFilter "linear"}}
+               :linear {:magFilter "linear" :minFilter "linear"}
+               :material {:magFilter "linear" :minFilter "linear" :mipmapFilter "linear"
+                          :addressModeU "repeat" :addressModeV "repeat"}}
    :pipelines {:shadow0 {:shader :depth0 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
                          :binds [:uniform]}
@@ -159,10 +168,14 @@
                          :binds [:uniform]}
                :main   {:shader :lit :cull "back" :color HDR-FORMAT
                         :depth {:format "depth24plus" :write true :compare "less-equal"}
-                        :binds [:uniform {:texture :shadow} {:sampler :comparison}]}
+                        :binds [:uniform {:texture :shadow} {:sampler :comparison}
+                                {:texture :albedo} {:texture :normal}
+                                {:texture :metallic-roughness} {:sampler :material}]}
                :main-direct {:shader :lit-direct :cull "back" :color :screen
                              :depth {:format "depth24plus" :write true :compare "less-equal"}
-                             :binds [:uniform {:texture :shadow} {:sampler :comparison}]}
+                             :binds [:uniform {:texture :shadow} {:sampler :comparison}
+                                     {:texture :albedo} {:texture :normal}
+                                     {:texture :metallic-roughness} {:sampler :material}]}
                :bloom {:shader :bloom :fullscreen true :color HDR-FORMAT
                        :binds [{:texture :hdr} {:sampler :linear}]}
                :composite {:shader :composite :fullscreen true :color :screen
@@ -214,8 +227,10 @@
         {:buf buf' :grew? true}))))
 
 (defn- vattr [fmt off loc] #js {:format fmt :offset off :shaderLocation loc})
-(defn- vlayout []   ;; cube(pos+normal, stride 24) + instance(model+color+material, stride 96)
-  #js [#js {:arrayStride 24 :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)]}
+(defn- vlayout []   ;; mesh(pos+normal+uv+tangent, stride 48) + instance(..., stride 96)
+  #js [#js {:arrayStride 48
+            :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)
+                             (vattr "float32x2" 24 8) (vattr "float32x4" 32 9)]}
        #js {:arrayStride 96 :stepMode "instance"
             :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3) (vattr "float32x4" 32 4)
                              (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}])
@@ -248,6 +263,25 @@
                           (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
                       binds))}))
 
+(defn- upload-rgba8-texture!
+  "Upload the common :kotoba.render/texture-rgba8-v1 descriptor and return the
+   same {:tex :view :format :width :height} resource shape used by graph targets."
+  [device queue {:keys [width height data color-space schema]}]
+  (when-not (= schema :kotoba.render/texture-rgba8-v1)
+    (throw (ex-info "unsupported material texture descriptor" {:schema schema})))
+  (let [format (if (= color-space :srgb) "rgba8unorm-srgb" "rgba8unorm")
+        tex (w3/create-texture!
+             device #js {:size #js [width height 1]
+                         :format format
+                         :usage (bit-or (w3/texture-usage :texture-binding)
+                                        (w3/texture-usage :copy-dst))})]
+    (w3/write-texture! queue #js {:texture tex}
+                       (js/Uint8Array. (clj->js data))
+                       #js {:offset 0 :bytesPerRow (* width 4) :rowsPerImage height}
+                       #js [width height 1])
+    {:tex tex :view (w3/create-view tex) :format format
+     :width width :height height}))
+
 (defn- init-webgl-fallback! [canvas opts]
   (if-let [viewport (webgl/init-mesh-viewport! canvas)]
     (let [geom-specs (merge ir/default-geometry (:geometry opts))
@@ -261,6 +295,8 @@
   "Set up WebGPU on the canvas once from the render graph. Returns a Promise of a context.
    opts (optional): {:graph <render-graph EDN>
                      :quality-plan <:kotoba.render/quality-v1 EDN>
+                     :material-textures {:albedo/:normal/:metallic-roughness
+                                         <:kotoba.render/texture-rgba8-v1>}
                      :geometry <{:geo-kw {:type … params}} EDN>} —
    default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
@@ -336,6 +372,13 @@
                    direct-depth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
                    targets (assoc targets :direct-depth {:view (w3/create-view direct-depth)
                                                          :width w :height h :format "depth24plus"})
+                   texture-set (render-texture/pbr-texture-set (:material-textures opts))
+                   material-resources
+                   (reduce-kv (fn [resources kind descriptor]
+                                (assoc resources kind
+                                       (upload-rgba8-texture! device q descriptor)))
+                              {} texture-set)
+                   targets (merge targets material-resources)
                    ;; pipelines + bind groups, from EDN
                    pipelines (reduce-kv
                                (fn [m k pd]
@@ -349,6 +392,10 @@
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
+                :material-textures (into {}
+                                         (map (fn [[kind resource]]
+                                                [kind (select-keys resource [:format :width :height])]))
+                                         material-resources)
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
                 :post-evidence (atom nil)
@@ -368,7 +415,7 @@
   "Write one instance directly into the shared Float32Array. This is the
   closed-form T*Ry*S matrix used by model-mat, avoiding three temporary
   matrices, two matrix multiplies, and two clj->js arrays per instance."
-  [idata i {:keys [pos color size yaw metallic roughness emissive]}]
+  [idata i {:keys [pos color size yaw metallic roughness emissive textured?]}]
   (let [[x y z] pos
         [w h] (or size [1 1])
         yaw (or yaw 0)
@@ -399,7 +446,7 @@
     (aset idata (+ base 20) (or metallic 0.0))
     (aset idata (+ base 21) (or roughness 0.65))
     (aset idata (+ base 22) (or emissive 0.0))
-    (aset idata (+ base 23) 0)))
+    (aset idata (+ base 23) (if textured? 1.0 0.0))))
 
 (defn- compute-instance-data
   "Pure: bucket instances by geometry kind (so each kind's instances are
@@ -625,6 +672,11 @@
   "Last adaptive post-processing decision for profiling/Studio diagnostics."
   [ctx]
   (some-> ctx :post-evidence deref))
+
+(defn material-texture-evidence
+  "Uploaded PBR texture formats and dimensions (never includes pixel data)."
+  [ctx]
+  (:material-textures ctx))
 
 (defn- draw-webgl! [{:keys [geos width height instance-cache] :as viewport} render-ir]
   (let [instances (:instances render-ir)

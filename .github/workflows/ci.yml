@@ -21,7 +21,7 @@ jobs:
         with: { repository: kotoba-lang/expr, path: expr }
       - name: Checkout bb.edn sibling graph
         run: |
-          for repo in wgsl sprite-gpu sprite2d sky shaders render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
+          for repo in wgsl sprite-gpu sprite2d sky shaders render render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
             git clone --depth 1 "https://github.com/kotoba-lang/${repo}.git" "${repo}"
           done
         working-directory: .
@@ -57,7 +57,7 @@ jobs:
         with: { repository: kotoba-lang/expr, path: expr }
       - name: Checkout bb.edn sibling graph
         run: |
-          for repo in wgsl sprite-gpu sprite2d sky shaders render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
+          for repo in wgsl sprite-gpu sprite2d sky shaders render render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
             git clone --depth 1 "https://github.com/kotoba-lang/${repo}.git" "${repo}"
           done
         working-directory: .
