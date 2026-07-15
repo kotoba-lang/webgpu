@@ -153,6 +153,7 @@
    :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}
                :linear {:magFilter "linear" :minFilter "linear"}
                :material {:magFilter "linear" :minFilter "linear" :mipmapFilter "linear"
+                          :maxAnisotropy 8
                           :addressModeU "repeat" :addressModeV "repeat"}}
    :pipelines {:shadow0 {:shader :depth0 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
@@ -265,22 +266,29 @@
 
 (defn- upload-rgba8-texture!
   "Upload the common :kotoba.render/texture-rgba8-v1 descriptor and return the
-   same {:tex :view :format :width :height} resource shape used by graph targets."
+   same resource shape used by graph targets. A complete CPU-generated mip
+   chain is uploaded so minification is stable on distant geometry."
   [device queue {:keys [width height data color-space schema]}]
   (when-not (= schema :kotoba.render/texture-rgba8-v1)
     (throw (ex-info "unsupported material texture descriptor" {:schema schema})))
   (let [format (if (= color-space :srgb) "rgba8unorm-srgb" "rgba8unorm")
+        mip-level-count (render-texture/mip-level-count width height)
+        levels (into [{:level 0 :width width :height height :data data}]
+                     (render-texture/generate-mipmaps-cpu
+                      data width height mip-level-count))
         tex (w3/create-texture!
              device #js {:size #js [width height 1]
+                         :mipLevelCount mip-level-count
                          :format format
                          :usage (bit-or (w3/texture-usage :texture-binding)
                                         (w3/texture-usage :copy-dst))})]
-    (w3/write-texture! queue #js {:texture tex}
-                       (js/Uint8Array. (clj->js data))
-                       #js {:offset 0 :bytesPerRow (* width 4) :rowsPerImage height}
-                       #js [width height 1])
+    (doseq [{:keys [level width height data]} levels]
+      (w3/write-texture! queue #js {:texture tex :mipLevel level}
+                         (js/Uint8Array. (clj->js data))
+                         #js {:offset 0 :bytesPerRow (* width 4) :rowsPerImage height}
+                         #js [width height 1]))
     {:tex tex :view (w3/create-view tex) :format format
-     :width width :height height}))
+     :width width :height height :mip-level-count mip-level-count}))
 
 (defn- init-webgl-fallback! [canvas opts]
   (if-let [viewport (webgl/init-mesh-viewport! canvas)]
@@ -394,7 +402,8 @@
                 :targets targets :pipelines pipelines :graph graph
                 :material-textures (into {}
                                          (map (fn [[kind resource]]
-                                                [kind (select-keys resource [:format :width :height])]))
+                                                [kind (select-keys resource [:format :width :height
+                                                                             :mip-level-count])]))
                                          material-resources)
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
