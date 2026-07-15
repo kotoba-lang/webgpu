@@ -280,6 +280,43 @@
 
 (defn- arr3 [m k d] (or (get m k) d))
 
+(defn- pack-instance!
+  "Write one instance directly into the shared Float32Array. This is the
+  closed-form T*Ry*S matrix used by model-mat, avoiding three temporary
+  matrices, two matrix multiplies, and two clj->js arrays per instance."
+  [idata i {:keys [pos color size yaw metallic roughness emissive]}]
+  (let [[x y z] pos
+        [w h] (or size [1 1])
+        yaw (or yaw 0)
+        c (js/Math.cos yaw)
+        s (js/Math.sin yaw)
+        base (* i 24)]
+    ;; column-major translate(pos + up*h/2) * rotateY(yaw) * scale(w,h,w)
+    (aset idata base (* c w))
+    (aset idata (+ base 1) 0)
+    (aset idata (+ base 2) (* (- s) w))
+    (aset idata (+ base 3) 0)
+    (aset idata (+ base 4) 0)
+    (aset idata (+ base 5) h)
+    (aset idata (+ base 6) 0)
+    (aset idata (+ base 7) 0)
+    (aset idata (+ base 8) (* s w))
+    (aset idata (+ base 9) 0)
+    (aset idata (+ base 10) (* c w))
+    (aset idata (+ base 11) 0)
+    (aset idata (+ base 12) x)
+    (aset idata (+ base 13) (+ y (* h 0.5)))
+    (aset idata (+ base 14) z)
+    (aset idata (+ base 15) 1)
+    (aset idata (+ base 16) (color 0))
+    (aset idata (+ base 17) (color 1))
+    (aset idata (+ base 18) (color 2))
+    (aset idata (+ base 19) 1)
+    (aset idata (+ base 20) (or metallic 0.0))
+    (aset idata (+ base 21) (or roughness 0.65))
+    (aset idata (+ base 22) (or emissive 0.0))
+    (aset idata (+ base 23) 0)))
+
 (defn- compute-instance-data
   "Pure: sort instances by geometry kind (so each kind's instances are
   contiguous → one instanced draw per kind via a firstInstance offset —
@@ -305,12 +342,7 @@
         [cxx czz] [(/ (cz 0) n) (/ (cz 1) n)]
         idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
     (dotimes [i (count insts)]
-      (let [{:keys [pos color size yaw metallic roughness emissive]} (nth insts i)
-            m (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1))
-            base (* i 24)]
-        (.set idata m base)
-        (.set idata (clj->js [(color 0) (color 1) (color 2) 1]) (+ base 16))
-        (.set idata (clj->js [(or metallic 0.0) (or roughness 0.65) (or emissive 0.0) 0]) (+ base 20))))
+      (pack-instance! idata i (nth insts i)))
     {:raw-instances raw-instances :insts insts :geo-groups geo-groups :cxx cxx :czz czz :idata idata}))
 
 (defn- draw-webgpu!
@@ -419,7 +451,8 @@
         cached @instance-cache
         cache-hit? (and cached (identical? instances (:instances cached))
                         (= (:globals render-ir) (:globals cached)))
-        computed (if cache-hit? cached
+        computed (if cache-hit?
+                   cached
                    (let [{:keys [cxx czz]} (compute-instance-data instances)
                          globals (:globals render-ir)
                          eye (arr3 globals :eye [(+ cxx 60) 80 (+ czz 60)])
