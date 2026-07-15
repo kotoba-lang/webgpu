@@ -21,6 +21,21 @@
   (is (thrown-with-msg? Exception #"unsupported render-quality schema"
                         (quality/resolve-plan graph {:shadow {}}))))
 
+(deftest applies-density-budget-deterministically
+  (let [instances [{:id :far :pos [20 0 0] :triangles 12}
+                   {:id :hero :pos [30 0 0] :importance 10 :triangles 12}
+                   {:id :near :pos [2 0 0] :triangles 12}]
+        result (quality/density-plan instances [0 0 0]
+                                     {:max-visible-instances 2
+                                      :max-visible-triangles 24})]
+    (is (= [:hero :near] (mapv :id (:instances result))))
+    (is (= 1 (:culled-count result)))
+    (is (:budget-applied? result)))
+  (let [instances [{:id :a :pos [0 0 0]}]
+        result (quality/density-plan instances nil {:max-visible-instances 10})]
+    (is (identical? instances (:instances result)))
+    (is (false? (:budget-applied? result)))))
+
 (let [{:keys [fail error]} (run-tests 'quality-adapter-test)]
   (when (pos? (+ fail error))
     (throw (ex-info "quality adapter tests failed" {:fail fail :error error}))))
