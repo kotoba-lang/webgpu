@@ -179,9 +179,6 @@
    ;; bloom/intermediate-target work that would otherwise back-pressure the GPU.
    :adaptive-post {:max-instances 256
                    :passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
-                            {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
-                            {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
-                            {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
                             {:pipeline :main-direct :color :screen :depth :direct-depth :clear :sky}]}})
 
 ;; ADR-2607100100 M6: this used to be a hard cap — draw! silently `take`-ing
@@ -517,6 +514,9 @@
         pnear (or (:near g) 0.5) pfar (or (:far g) 4000)
         vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ w (max 1 h)) pnear pfar)
                    (look-at (vec eye) (vec target) [0 1 0]))
+        adaptive-post (:adaptive-post graph)
+        post-degraded? (and adaptive-post
+                            (> (count insts) (:max-instances adaptive-post)))
         sl (let [l (js/Math.hypot (sun-dir 0) (sun-dir 1) (sun-dir 2)) l (if (< l 1e-6) 1.0 l)]
              [(/ (sun-dir 0) l) (/ (sun-dir 1) l) (/ (sun-dir 2) l)])
         ;; Cascaded sun frusta follow the camera. Each slice uses a conservative
@@ -524,9 +524,11 @@
         shd (ir/shadow (:shadow g))
         authored-splits (get-in quality-resolution [:effective :shadow :splits])
         base-splits (if (seq authored-splits) authored-splits [48.0 128.0 320.0 800.0])
-        splits (loop [xs (vec (take 4 base-splits))]
-                 (if (= 4 (count xs)) xs
-                   (recur (conj xs (or (peek xs) 800.0)))))
+        splits (if post-degraded?
+                 [pfar pfar pfar pfar]
+                 (loop [xs (vec (take 4 base-splits))]
+                   (if (= 4 (count xs)) xs
+                     (recur (conj xs (or (peek xs) 800.0))))))
         view-dir (v-norm (v-sub target eye))
         aspect (/ w (max 1 h))
         tan-half (js/Math.tan (/ (* fov js/Math.PI) 360.0))
@@ -581,11 +583,10 @@
                  (if (some? layer)
                    (get-in targets [k :layer-views layer])
                    (get-in targets [k :view]))))
-          adaptive-post (:adaptive-post graph)
-          post-degraded? (and adaptive-post (> ninst (:max-instances adaptive-post)))
           frame-passes (if post-degraded? (:passes adaptive-post) (:passes graph))
           _ (some-> post-evidence
                     (reset! {:tier (if post-degraded? :direct-aces :hdr-bloom)
+                             :shadow-cascades (if post-degraded? 1 4)
                              :instances ninst
                              :threshold (:max-instances adaptive-post)}))
           draw-geom (fn [p pipe bnd]
