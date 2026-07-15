@@ -775,7 +775,7 @@
                             (w3/set-index-buffer! p gi "uint16")
                             (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
       ;; run the graph's passes in order (EDN-driven)
-      (doseq [{:keys [pipeline color depth clear clear-depth cascade]} frame-passes]
+      (doseq [{:keys [pipeline color depth clear clear-depth cascade draw]} frame-passes]
         (let [{:keys [pipe bind fullscreen]} (get pipelines pipeline)
               catts (if color
                       (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
@@ -788,11 +788,12 @@
                         #js {:view (vw depth cascade) :depthLoadOp "clear"
                              :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}))
               rp (w3/begin-render-pass! enc pass-desc)]
-          (if fullscreen
-            (do (w3/set-pipeline! rp pipe)
-                (w3/set-bind-group! rp 0 bind)
-                (w3/draw! rp 3))
-            (draw-geom rp pipe bind))
+          (when (not= false draw)
+            (if fullscreen
+              (do (w3/set-pipeline! rp pipe)
+                  (w3/set-bind-group! rp 0 bind)
+                  (w3/draw! rp 3))
+              (draw-geom rp pipe bind)))
           (w3/end-pass! rp)))
       (w3/submit! queue [(w3/finish! enc)])
       (some-> frame-evidence
@@ -800,7 +801,7 @@
                        (-> e
                            (update :submits (fnil inc 0))
                            (assoc :submitted-instance-count ninst
-                                  :pass-count (count (:passes graph)))))))))))
+                                  :pass-count (count frame-passes)))))))))))
 
 (defn post-evidence
   "Last adaptive post-processing decision for profiling/Studio diagnostics."
