@@ -27,6 +27,8 @@
     (is (str/includes? source "(aset idata (+ base 10) (* c d))"))
     (is (str/includes? source "(model-mat pos (or yaw 0) w h d)"))
     (is (str/includes? source "(vattr \"float32x4\" 96 10)"))
+    (is (str/includes? source "(vattr \"float32x3\" 48 11)"))
+    (is (str/includes? source "biome-weights"))
     (is (str/includes? source "(render-instance/normalize-uv-transform uv-transform)"))
     (is (str/includes? source ":dimension \"cube\""))
     (is (str/includes? source "render-environment/neutral-pbr-environment"))
