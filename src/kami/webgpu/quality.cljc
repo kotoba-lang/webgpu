@@ -1,6 +1,7 @@
 (ns kami.webgpu.quality
   "Adapter from `:kotoba.render/quality-v1` plans to the capabilities currently
-   implemented by the browser WebGPU executor. Pure data; no JS API calls.")
+   implemented by the browser WebGPU executor. Pure data; no JS API calls."
+  (:require [kami.webgpu.ir :as ir]))
 
 (def capabilities
   {:backend :webgpu
@@ -69,8 +70,8 @@
                        [ex ey ez] eye
                        distance (#?(:clj Math/sqrt :cljs js/Math.sqrt)
                                  (+ (* (- x ex) (- x ex)) (* (- y ey) (- y ey)) (* (- z ez) (- z ez))))
-                       [width height] (or (:size instance) [1.0 1.0])
-                       radius (* 0.5 (max width height))
+                       [width height depth] (ir/instance-size (:size instance))
+                       radius (* 0.5 (max width height depth))
                        pixels (* (or bias 1.0)
                                  (projected-radius-px radius distance fov-radians viewport-height))
                        previous (get state key (:geo instance))

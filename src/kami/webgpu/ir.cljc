@@ -16,7 +16,8 @@
                   :target [x y z]}                ;;   else an overview is derived)
       :instances [{:pos   [x y z]                 ;; world position (ground at y)
                    :color [r g b]                 ;; albedo
-                   :size  [w h]                   ;; footprint w (x,z) × height h
+                   :size  [w h d]                 ;; width × height × depth
+                                                  ;; legacy [w h] means depth=w
                    :yaw   theta                    ;; rotation about Y (radians)
                    :metallic m :roughness r :emissive e
                    :textured? true}]} ;; sample bound albedo/normal/MR textures
@@ -109,13 +110,22 @@
     (geom/box 1 1 1)))
 
 (defn instance
-  "An instanced cuboid. Pure data. Merge a `material` map in for PBR."
+  "An instanced cuboid. `size` is `[width height depth]`; legacy `[w h]`
+   remains supported and means `[w h w]`. Pure data. Merge a `material` map in
+   for PBR."
   [pos color size & {:keys [yaw metallic roughness emissive textured?] :or {yaw 0}}]
   (cond-> {:pos pos :color color :size size :yaw yaw}
     metallic  (assoc :metallic metallic)
     roughness (assoc :roughness roughness)
     emissive  (assoc :emissive emissive)
     textured? (assoc :textured? true)))
+
+(defn instance-size
+  "Normalize an instance size to `[width height depth]`. The historical two-axis
+   form described a square x/z footprint, so `[w h]` expands to `[w h w]`."
+  [size]
+  (let [[width height depth] (or size [1 1 1])]
+    [(or width 1) (or height 1) (or depth width 1)]))
 
 (defn sky
   [horizon sun-dir sun]
