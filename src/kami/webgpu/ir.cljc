@@ -32,7 +32,8 @@
    EDN) extend the same map without changing the contract — the executor reads what
    it understands and ignores the rest."
   (:require [kami.webgpu.geometry :as geom]
-            [kotoba.render.building :as building]))
+            [kotoba.render.building :as building]
+            [kotoba.render.terrain :as terrain]))
 
 (defn material
   "A PBR material — pure data. metallic 0=dielectric…1=metal; roughness 0=mirror…1=matte;
@@ -131,6 +132,16 @@
                        :index-count (count indices)})))
     (select-keys mesh [:positions :normals :uvs :indices])))
 
+(defn- terrain-geometry [{:keys [detail] :as spec}]
+  (let [[positions normals uvs indices]
+        (terrain/terrain-mesh
+         (select-keys spec [:patch :size :base-segments :amplitude :seed :skirt-depth])
+         (or detail :high))]
+    {:positions (mapv vec (partition 3 positions))
+     :normals (mapv vec (partition 3 normals))
+     :uvs (mapv vec (partition 2 uvs))
+     :indices indices}))
+
 (defn mesh-from-spec
   "Bake one geometry spec → a mesh {:positions :normals :indices}. Pure + cross-platform
    (a native executor reimplements this dispatch over the same data). Unknown :type → unit box."
@@ -142,6 +153,7 @@
     :plane    (geom/plane (or w 10) (or d 10))
     :building (building-geometry spec)
     :mesh     (registered-mesh spec)
+    :terrain  (terrain-geometry spec)
     (geom/box 1 1 1)))
 
 (defn instance
