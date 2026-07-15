@@ -106,6 +106,11 @@ defaults, which reproduce the original render byte-for-byte (pinned by `test/ren
 | `:fov` `:near` `:far` | the perspective camera (degrees / planes) | `60 / 0.5 / 4000` |
 | *(init! opt)* `:geometry` | the `:geo` mesh kinds — `{:kw {:type :box/:sphere/:cylinder/:plane …params}}` baked by `ir/mesh-from-spec` | `ir/default-geometry` |
 
+Shared procedural libraries may register a pre-baked portable mesh as
+`{:type :mesh :mesh {:positions [[x y z] ...] :normals [...] :indices [...]}}`.
+The IR validates its vertex/index shape before WebGPU or WebGL upload; metadata
+such as `:bounds` can remain beside the mesh for culling and quality evidence.
+
 ```clojure
 ;; a warmer dusk look + a wider shadow frustum + a custom mesh kind — all data:
 (gpu/init! canvas {:geometry (assoc ir/default-geometry :slab {:type :box :size [3 0.3 3]})})

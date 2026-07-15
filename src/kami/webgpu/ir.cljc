@@ -115,6 +115,22 @@
      :uvs (mapv vec (partition 2 uvs))
      :indices indices}))
 
+(defn- registered-mesh [{:keys [mesh]}]
+  (let [{:keys [positions normals indices]} mesh
+        vertex-count (count positions)]
+    (when-not (and (map? mesh)
+                   (seq positions)
+                   (seq indices)
+                   (= vertex-count (count normals))
+                   (every? #(= 3 (count %)) positions)
+                   (every? #(= 3 (count %)) normals)
+                   (zero? (mod (count indices) 3))
+                   (every? #(< -1 % vertex-count) indices))
+      (throw (ex-info "invalid registered geometry mesh"
+                      {:vertex-count vertex-count :normal-count (count normals)
+                       :index-count (count indices)})))
+    (select-keys mesh [:positions :normals :uvs :indices])))
+
 (defn mesh-from-spec
   "Bake one geometry spec → a mesh {:positions :normals :indices}. Pure + cross-platform
    (a native executor reimplements this dispatch over the same data). Unknown :type → unit box."
@@ -125,6 +141,7 @@
     :cylinder (geom/cylinder (or r 0.5) (or h 1) (or sectors 20))
     :plane    (geom/plane (or w 10) (or d 10))
     :building (building-geometry spec)
+    :mesh     (registered-mesh spec)
     (geom/box 1 1 1)))
 
 (defn instance
