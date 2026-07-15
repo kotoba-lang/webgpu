@@ -10,8 +10,10 @@
 
 (defn- well-formed?
   "Every index is in range and the index list is whole triangles."
-  [{:keys [positions normals indices]}]
+  [{:keys [positions normals uvs indices]}]
   (and (= (count positions) (count normals))
+       (= (count positions) (count uvs))
+       (every? #(and (= 2 (count %)) (every? number? %)) uvs)
        (zero? (mod (count indices) 3))
        (every? #(< -1 % (count positions)) indices)))
 
