@@ -318,7 +318,7 @@
     (aset idata (+ base 23) 0)))
 
 (defn- compute-instance-data
-  "Pure: sort instances by geometry kind (so each kind's instances are
+  "Pure: bucket instances by geometry kind (so each kind's instances are
   contiguous → one instanced draw per kind via a firstInstance offset —
   depth is handled by the z-buffer, so draw order is free), group them,
   compute the XZ centroid (the default-camera fallback point), and
@@ -331,13 +331,32 @@
   `raw-instances` actually has (ADR-2607100100 M6; this used to silently
   `take MAX-INST` and drop the rest)."
   [raw-instances]
-  (let [insts (->> raw-instances (sort-by #(name (or (:geo %) :box))) vec)
-        geo-groups (loop [parts (partition-by #(or (:geo %) :box) insts), at 0, acc []]
-                     (if (empty? parts)
-                       acc
-                       (let [p (first parts) c (count p)]
-                         (recur (rest parts) (+ at c) (conj acc [(or (:geo (first p)) :box) c at])))))
-        cz (reduce (fn [a {:keys [pos]}] [(+ (a 0) (pos 0)) (+ (a 1) (pos 2))]) [0 0] insts)
+  (let [buckets (js/Map.)
+        ;; Bucket and accumulate the camera centroid in one O(n) source pass.
+        ;; JS arrays are intentional here: transient mutable buckets avoid a
+        ;; persistent-vector allocation for every entity in a dynamic frame.
+        cz (reduce (fn [[sx sz] {:keys [pos] :as instance}]
+                     (let [geo (or (:geo instance) :box)
+                           bucket (or (.get buckets geo)
+                                      (let [fresh #js []]
+                                        (.set buckets geo fresh)
+                                        fresh))]
+                       (.push bucket instance)
+                       [(+ sx (pos 0)) (+ sz (pos 2))]))
+                   [0 0] raw-instances)
+        geo-keys (js/Array.from (.keys buckets))
+        _ (.sort geo-keys (fn [a b] (.localeCompare (name a) (name b))))
+        insts #js []
+        geo-groups
+        (loop [i 0 acc []]
+          (if (= i (.-length geo-keys))
+            acc
+            (let [geo (aget geo-keys i)
+                  bucket (.get buckets geo)
+                  at (.-length insts)
+                  c (.-length bucket)]
+              (dotimes [j c] (.push insts (aget bucket j)))
+              (recur (inc i) (conj acc [geo c at])))))
         n (max 1 (count insts))
         [cxx czz] [(/ (cz 0) n) (/ (cz 1) n)]
         idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
