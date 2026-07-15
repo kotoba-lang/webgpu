@@ -100,15 +100,16 @@
 (defn- mesh->buffers
   "Interleave PBR vertices plus optional grass/soil/rock biome weights.
    Non-terrain meshes receive zero weights and retain single-layer shading."
-  [{:keys [positions normals uvs biome-weights indices]}]
+  [{:keys [positions normals uvs biome-weights biome-layer-indices indices]}]
   (let [flat-pos (vec (mapcat identity positions))
         flat-normal (vec (mapcat identity normals))
         flat-uv (vec (mapcat identity uvs))
         tangents (vec (partition 4 (render-mesh/compute-tangents flat-pos flat-normal flat-uv indices)))
         weights (or biome-weights (repeat (count positions) [0.0 0.0 0.0]))
-        vertices (mapcat (fn [p n uv tangent weight]
-                           (concat p n uv tangent weight))
-                         positions normals uvs tangents weights)]
+        layers (or biome-layer-indices (repeat (count positions) [0.0 0.0 0.0]))
+        vertices (mapcat (fn [p n uv tangent weight layer-indices]
+                           (concat p n uv tangent weight layer-indices))
+                         positions normals uvs tangents weights layers)]
     [(js/Float32Array.
       (clj->js (vec vertices)))
      (js/Uint16Array. (clj->js (vec indices)))]))
@@ -247,11 +248,11 @@
         {:buf buf' :grew? true}))))
 
 (defn- vattr [fmt off loc] #js {:format fmt :offset off :shaderLocation loc})
-(defn- vlayout []   ;; mesh(pos+normal+uv+tangent+biome, stride 60) + instance
-  #js [#js {:arrayStride 60
+(defn- vlayout []   ;; mesh(pos+normal+uv+tangent+weights+layer indices, stride 72)
+  #js [#js {:arrayStride 72
             :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)
                              (vattr "float32x2" 24 8) (vattr "float32x4" 32 9)
-                             (vattr "float32x3" 48 11)]}
+                             (vattr "float32x3" 48 11) (vattr "float32x3" 60 12)]}
        #js {:arrayStride 112 :stepMode "instance"
             :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3) (vattr "float32x4" 32 4)
                              (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)
