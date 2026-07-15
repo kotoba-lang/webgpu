@@ -389,10 +389,17 @@
          (.then
            (fn [{:keys [device packed-hdr?]}]
              (let [gpu-errors (atom [])
+                   device-loss (atom nil)
+                   frame-evidence (atom {:draw-attempts 0 :submits 0})
                    _ (set! (.-onuncapturederror device)
                            (fn [event]
                              (swap! gpu-errors conj
                                     (str (some-> event .-error .-message)))))
+                   _ (-> (.-lost device)
+                         (.then (fn [info]
+                                  (reset! device-loss
+                                          {:reason (str (.-reason info))
+                                           :message (str (.-message info))}))))
                    graph-base (resolve-hdr-graph (or (:graph opts) default-graph)
                                                  packed-hdr?)
                    quality-resolution (when-let [plan (:quality-plan opts)]
@@ -485,6 +492,8 @@
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
                 :gpu-errors gpu-errors
+                :device-loss device-loss
+                :frame-evidence frame-evidence
                 :adapter-options (:adapter-options opts)
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
@@ -628,8 +637,14 @@
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
   [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph
-           geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence]} ir]
+           geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
+           frame-evidence]} ir]
   (let [raw-instances (:instances ir)
+        _ (some-> frame-evidence
+                  (swap! (fn [e]
+                           (-> e
+                               (update :draw-attempts (fnil inc 0))
+                               (assoc :source-instance-count (count raw-instances))))))
         lod (get-in quality-resolution [:effective :lod])
         authored-eye (get-in ir [:globals :eye])
         fov (or (get-in ir [:globals :fov]) 60)
@@ -779,7 +794,13 @@
                 (w3/draw! rp 3))
             (draw-geom rp pipe bind))
           (w3/end-pass! rp)))
-      (w3/submit! queue [(w3/finish! enc)])))))
+      (w3/submit! queue [(w3/finish! enc)])
+      (some-> frame-evidence
+              (swap! (fn [e]
+                       (-> e
+                           (update :submits (fnil inc 0))
+                           (assoc :submitted-instance-count ninst
+                                  :pass-count (count (:passes graph)))))))))))
 
 (defn post-evidence
   "Last adaptive post-processing decision for profiling/Studio diagnostics."
@@ -801,6 +822,8 @@
    :force-fallback-adapter (boolean (some-> ctx :adapter-options
                                             (aget "forceFallbackAdapter")))
    :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
+   :device-loss (some-> ctx :device-loss deref)
+   :frames (some-> ctx :frame-evidence deref)
    :webgpu-init-error (:webgpu-init-error ctx)})
 
 (defn settle!
