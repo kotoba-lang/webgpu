@@ -15,6 +15,7 @@
   (:require [kami.webgpu.ir :as ir]
             [kami.webgpu.quality :as quality]
             [kotoba.webgl :as webgl]
+            [kotoba.render.environment :as render-environment]
             [kotoba.render.mesh :as render-mesh]
             [kotoba.render.texture :as render-texture]
             [kotoba.shaders :as shaders]
@@ -171,12 +172,16 @@
                         :depth {:format "depth24plus" :write true :compare "less-equal"}
                         :binds [:uniform {:texture :shadow} {:sampler :comparison}
                                 {:texture :albedo} {:texture :normal}
-                                {:texture :metallic-roughness} {:sampler :material}]}
+                                {:texture :metallic-roughness} {:sampler :material}
+                                {:texture :irradiance} {:texture :prefiltered-specular}
+                                {:texture :brdf-lut}]}
                :main-direct {:shader :lit-direct :cull "back" :color :screen
                              :depth {:format "depth24plus" :write true :compare "less-equal"}
                              :binds [:uniform {:texture :shadow} {:sampler :comparison}
                                      {:texture :albedo} {:texture :normal}
-                                     {:texture :metallic-roughness} {:sampler :material}]}
+                                     {:texture :metallic-roughness} {:sampler :material}
+                                     {:texture :irradiance} {:texture :prefiltered-specular}
+                                     {:texture :brdf-lut}]}
                :bloom {:shader :bloom :fullscreen true :color HDR-FORMAT
                        :binds [{:texture :hdr} {:sampler :linear}]}
                :composite {:shader :composite :fullscreen true :color :screen
@@ -299,6 +304,44 @@
      :format format :width array-width :height array-height :layer-count layer-count
      :mip-level-count mip-level-count}))
 
+(defn- upload-rgba8-cube!
+  [device queue {:keys [schema color-space levels]}]
+  (when-not (= schema :kotoba.render/cube-rgba8-v1)
+    (throw (ex-info "unsupported environment cube descriptor" {:schema schema})))
+  (let [base-size (:size (first levels))
+        format (if (= color-space :srgb) "rgba8unorm-srgb" "rgba8unorm")
+        tex (w3/create-texture!
+             device #js {:size #js [base-size base-size 6]
+                         :mipLevelCount (count levels)
+                         :format format
+                         :usage (bit-or (w3/texture-usage :texture-binding)
+                                        (w3/texture-usage :copy-dst))})]
+    (doseq [[level-index {:keys [size faces]}] (map-indexed vector levels)
+            [face-index face] (map-indexed vector render-environment/cube-faces)]
+      (w3/write-texture! queue #js {:texture tex :mipLevel level-index
+                                    :origin #js [0 0 face-index]}
+                         (js/Uint8Array. (clj->js (get faces face)))
+                         #js {:offset 0 :bytesPerRow (* size 4) :rowsPerImage size}
+                         #js [size size 1]))
+    {:tex tex :view (w3/create-view tex #js {:dimension "cube"})
+     :format format :size base-size :mip-level-count (count levels)}))
+
+(defn- upload-rgba8-2d!
+  [device queue {:keys [schema width height data color-space]}]
+  (when-not (= schema :kotoba.render/texture-rgba8-v1)
+    (throw (ex-info "unsupported 2D texture descriptor" {:schema schema})))
+  (let [format (if (= color-space :srgb) "rgba8unorm-srgb" "rgba8unorm")
+        tex (w3/create-texture!
+             device #js {:size #js [width height 1] :format format
+                         :usage (bit-or (w3/texture-usage :texture-binding)
+                                        (w3/texture-usage :copy-dst))})]
+    (w3/write-texture! queue #js {:texture tex}
+                       (js/Uint8Array. (clj->js data))
+                       #js {:offset 0 :bytesPerRow (* width 4) :rowsPerImage height}
+                       #js [width height 1])
+    {:tex tex :view (w3/create-view tex) :format format
+     :width width :height height}))
+
 (defn- init-webgl-fallback! [canvas opts]
   (if-let [viewport (webgl/init-mesh-viewport! canvas)]
     (let [geom-specs (merge ir/default-geometry (:geometry opts))
@@ -315,6 +358,7 @@
                      :material-textures {:albedo/:normal/:metallic-roughness
                                          <:kotoba.render/texture-rgba8-v1>}
                      :material-texture-sets [<material texture set> ...]
+                     :environment <:kotoba.render/pbr-environment-v1>
                      :geometry <{:geo-kw {:type … params}} EDN>} —
    default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
@@ -398,7 +442,15 @@
                          (for [kind [:albedo :normal :metallic-roughness]]
                            [kind (upload-rgba8-texture-array!
                                   device q (mapv kind texture-library))]))
-                   targets (merge targets material-resources)
+                   environment (render-environment/pbr-environment
+                                (or (:environment opts)
+                                    render-environment/neutral-pbr-environment))
+                   environment-resources
+                   {:irradiance (upload-rgba8-cube! device q (:irradiance environment))
+                    :prefiltered-specular
+                    (upload-rgba8-cube! device q (:prefiltered-specular environment))
+                    :brdf-lut (upload-rgba8-2d! device q (:brdf-lut environment))}
+                   targets (merge targets material-resources environment-resources)
                    ;; pipelines + bind groups, from EDN
                    pipelines (reduce-kv
                                (fn [m k pd]
@@ -418,6 +470,12 @@
                                                                              :mip-level-count
                                                                              :layer-count])]))
                                          material-resources)
+                :environment (into {}
+                                   (map (fn [[kind resource]]
+                                          [kind (select-keys resource
+                                                             [:format :size :width :height
+                                                              :mip-level-count])]))
+                                   environment-resources)
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
                 :post-evidence (atom nil)
@@ -712,6 +770,11 @@
   [ctx]
   {:backend (:backend ctx)
    :webgpu-init-error (:webgpu-init-error ctx)})
+
+(defn environment-evidence
+  "Uploaded split-sum IBL resource metadata (never pixel data)."
+  [ctx]
+  (:environment ctx))
 
 (defn- draw-webgl! [{:keys [geos width height instance-cache] :as viewport} render-ir]
   (let [instances (:instances render-ir)
