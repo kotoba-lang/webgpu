@@ -428,12 +428,16 @@
                    ;; one vertex+index buffer per geometry kind, baked from EDN specs
                    ;; (ir/default-geometry + any {:geometry …} override); :geo picks a kind.
                    geom-specs (merge ir/default-geometry (:geometry opts))
+                   baked-geometries (into {} (map (fn [[k spec]]
+                                                    [k (ir/mesh-from-spec spec)]))
+                                          geom-specs)
+                   geometry-biomes (ir/geometry-biome-evidence baked-geometries)
                    geos (reduce-kv (fn [acc k spec]
-                                     (let [[v i] (mesh->buffers (ir/mesh-from-spec spec))]
+                                     (let [[v i] (mesh->buffers spec)]
                                        (assoc acc k {:vbuf (mkbuf v (w3/buffer-usage :vertex))
                                                      :ibuf (mkbuf i (w3/buffer-usage :index))
                                                      :idx-count (.-length i)})))
-                                   {} geom-specs)
+                                   {} baked-geometries)
                    box (:box geos)
                    inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
                    gbuf (w3/create-buffer! device #js {:size 448 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
@@ -503,6 +507,7 @@
                 :gpu-errors gpu-errors
                 :device-loss device-loss
                 :frame-evidence frame-evidence
+                :geometry-biomes geometry-biomes
                 :adapter-options (:adapter-options opts)
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
@@ -841,6 +846,7 @@
    :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
    :device-loss (some-> ctx :device-loss deref)
    :frames (some-> ctx :frame-evidence deref)
+   :geometry-biomes (:geometry-biomes ctx)
    :webgpu-init-error (:webgpu-init-error ctx)})
 
 (defn settle!

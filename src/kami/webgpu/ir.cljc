@@ -184,6 +184,26 @@
     :road-ribbon (road-ribbon-geometry spec)
     (geom/box 1 1 1)))
 
+(defn geometry-biome-evidence
+  "Summarize biome attributes on the baked meshes handed to a renderer upload.
+   Pixel/vertex payloads stay private; capture gates receive only mesh/vertex
+   counts and the distinct grass/soil/rock texture-layer mappings."
+  [meshes]
+  (let [weighted (keep (fn [[_ {:keys [biome-weights biome-layer-indices] :as mesh}]]
+                         (when (and (seq biome-weights)
+                                    (= (count (:positions mesh)) (count biome-weights))
+                                    (= (count biome-weights) (count biome-layer-indices))
+                                    (some #(some pos? %) biome-weights))
+                           mesh))
+                       meshes)]
+    {:uploaded-biome-mesh-count (count weighted)
+     :uploaded-biome-vertex-count (reduce + 0 (map (comp count :positions) weighted))
+     :layer-index-mappings (->> weighted
+                                (mapcat :biome-layer-indices)
+                                distinct
+                                sort
+                                vec)}))
+
 (defn instance
   "An instanced cuboid. `size` is `[width height depth]`; legacy `[w h]`
    remains supported and means `[w h w]`. Pure data. Merge a `material` map in
