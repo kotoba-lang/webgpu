@@ -123,14 +123,20 @@
                         :amplitude 6.0 :seed 2654435769 :skirt-depth 2.0}}
         high-surface (ir/mesh-from-spec (assoc base :detail :high :part :surface))
         low-surface (ir/mesh-from-spec (assoc base :detail :low :part :surface))
-        shoulder (ir/mesh-from-spec (assoc base :detail :high :part :shoulder))]
+        shoulder (ir/mesh-from-spec (assoc base :detail :high :part :shoulder))
+        marking (ir/mesh-from-spec
+                 (assoc base :detail :high :part :marking
+                        :marking {:width 0.18 :dash-length 2.5 :gap-length 2.0
+                                  :phase 0.5 :offsets [0.0] :clearance 0.02
+                                  :budget {:high 32 :medium 16 :low 8}}))]
     (is (> (count (:indices high-surface)) (count (:indices low-surface))))
-    (doseq [{:keys [positions normals uvs indices]} [high-surface low-surface shoulder]]
+    (doseq [{:keys [positions normals uvs indices]} [high-surface low-surface shoulder marking]]
       (is (= (count positions) (count normals) (count uvs)))
       (is (every? #(< -1 % (count positions)) indices)))
+    (is (seq (:indices marking)))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"unsupported road ribbon material part"
-                          (ir/mesh-from-spec (assoc base :part :marking))))))
+                          (ir/mesh-from-spec (assoc base :part :guardrail))))))
 
 (deftest authoring-a-fully-custom-look-is-pure-data
   ;; executable documentation: a game authoring a whole custom look — warmer dusk lighting,
