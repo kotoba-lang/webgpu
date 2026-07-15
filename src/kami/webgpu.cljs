@@ -111,7 +111,7 @@
 ;; uniform + shadow-map bindings, the PCF shadow fn, the VO varyings, the vertex and the fragment.
 ;; A bb token-equivalence gate (test/shader_test.clj) pins the generated WGSL to the on-screen-
 ;; verified original — identical token stream; only redundant grouping parens differ (always valid).
-(def SHADER (shaders/cascaded-lit-shader))
+(def SHADER (shaders/cascaded-hdr-shader))
 
 ;; depth-only shadow pass: render instances from the sun's POV into the shadow map.
 ;; the depth-only shadow pass — also generated from data (kami.shaders/shadow-shader).
@@ -124,13 +124,17 @@
    depth into the :shadow target, then the main pass draws to the screen sampling it.
    Reorder/add passes, swap shaders, or retarget by editing this map (or pass {:graph ...}
    to init!). Each pipeline's :binds wires its group-0 resources by name."
-  {:shaders   {:lit SHADER
+  {:shaders   {:lit SHADER :bloom (shaders/bloom-shader)
+               :composite (shaders/hdr-composite-shader)
                :depth0 (shaders/cascaded-shadow-shader 0)
                :depth1 (shaders/cascaded-shadow-shader 1)
                :depth2 (shaders/cascaded-shadow-shader 2)
                :depth3 (shaders/cascaded-shadow-shader 3)}
-   :targets   {:shadow {:depth "depth32float" :size [2048 2048 4] :layers 4}}
-   :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}}
+   :targets   {:shadow {:depth "depth32float" :size [2048 2048 4] :layers 4}
+               :hdr {:color "rgba16float" :scale 1.0}
+               :bloom {:color "rgba16float" :scale 0.5}}
+   :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}
+               :linear {:magFilter "linear" :minFilter "linear"}}
    :pipelines {:shadow0 {:shader :depth0 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
                          :binds [:uniform]}
@@ -143,14 +147,20 @@
                :shadow3 {:shader :depth3 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
                          :binds [:uniform]}
-               :main   {:shader :lit :cull "back" :color :screen
+               :main   {:shader :lit :cull "back" :color "rgba16float"
                         :depth {:format "depth24plus" :write true :compare "less-equal"}
-                        :binds [:uniform {:texture :shadow} {:sampler :comparison}]}}
+                        :binds [:uniform {:texture :shadow} {:sampler :comparison}]}
+               :bloom {:shader :bloom :fullscreen true :color "rgba16float"
+                       :binds [{:texture :hdr} {:sampler :linear}]}
+               :composite {:shader :composite :fullscreen true :color :screen
+                           :binds [{:texture :hdr} {:texture :bloom} {:sampler :linear}]}}
    :passes    [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
                {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
                {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
                {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
-               {:pipeline :main   :color :screen :depth :screen-depth :clear :sky}]})
+               {:pipeline :main :color :hdr :depth :screen-depth :clear :sky}
+               {:pipeline :bloom :color :bloom :clear [0 0 0]}
+               {:pipeline :composite :color :screen :clear [0 0 0]}]})
 
 ;; ADR-2607100100 M6: this used to be a hard cap — draw! silently `take`-ing
 ;; the first MAX-INST instances and dropping the rest, a correctness gap for
@@ -191,12 +201,16 @@
             :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3) (vattr "float32x4" 32 4)
                              (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}])
 
-(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color]}]
+(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen]}]
   (let [mod (w3/create-shader-module! device #js {:code (get shaders shader)})
         desc #js {:layout "auto"
-                  :vertex #js {:module mod :entryPoint "vs" :buffers (vlayout)}
-                  :primitive #js {:cullMode (or cull "back")}
-                  :depthStencil #js {:format (:format depth) :depthWriteEnabled (boolean (:write depth)) :depthCompare (:compare depth)}}]
+                  :vertex #js {:module mod :entryPoint "vs"
+                               :buffers (if fullscreen #js [] (vlayout))}
+                  :primitive #js {:cullMode (if fullscreen "none" (or cull "back"))}}
+    (when depth
+      (set! (.-depthStencil desc)
+            #js {:format (:format depth) :depthWriteEnabled (boolean (:write depth))
+                 :depthCompare (:compare depth)}))
     (when color   ;; no :color → depth-only pipeline (shadow pass)
       (set! (.-fragment desc) #js {:module mod :entryPoint "fs"
                                    :targets #js [#js {:format (if (= color :screen) fmt color)}]}))
@@ -271,8 +285,10 @@
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
                    targets (reduce-kv
-                             (fn [m k {:keys [depth color size layers]}]
-                               (let [[tw th size-layers] (or size [w h])
+                             (fn [m k {:keys [depth color size layers scale]}]
+                               (let [[sw sh size-layers] (or size [w h])
+                                     tw (max 1 (int (* sw (or scale 1.0))))
+                                     th (max 1 (int (* sh (or scale 1.0))))
                                      layers (or layers size-layers 1)
                                      f (or depth color)
                                      tex (w3/create-texture! device #js {:size #js [tw th layers] :format f
@@ -295,7 +311,9 @@
                    pipelines (reduce-kv
                                (fn [m k pd]
                                  (let [pipe (build-pipeline device fmt (:shaders graph) pd)]
-                                   (assoc m k {:pipe pipe :bind (build-bind device pipe gbuf targets samplers (:binds pd))})))
+                                   (assoc m k {:pipe pipe
+                                               :fullscreen (:fullscreen pd)
+                                               :bind (build-bind device pipe gbuf targets samplers (:binds pd))})))
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
@@ -542,17 +560,23 @@
                             (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
       ;; run the graph's passes in order (EDN-driven)
       (doseq [{:keys [pipeline color depth clear clear-depth cascade]} (:passes graph)]
-        (let [{:keys [pipe bind]} (get pipelines pipeline)
+        (let [{:keys [pipe bind fullscreen]} (get pipelines pipeline)
               catts (if color
                       (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
                         #js [#js {:view (vw color nil) :loadOp "clear" :storeOp "store"
                                   :clearValue #js {:r (c 0) :g (c 1) :b (c 2) :a 1}}])
                       #js [])
-              rp (w3/begin-render-pass! enc
-                   #js {:colorAttachments catts
-                        :depthStencilAttachment #js {:view (vw depth cascade) :depthLoadOp "clear"
-                                                     :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}})]
-          (draw-geom rp pipe bind)
+              pass-desc #js {:colorAttachments catts}
+              _ (when depth
+                  (set! (.-depthStencilAttachment pass-desc)
+                        #js {:view (vw depth cascade) :depthLoadOp "clear"
+                             :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}))
+              rp (w3/begin-render-pass! enc pass-desc)]
+          (if fullscreen
+            (do (w3/set-pipeline! rp pipe)
+                (w3/set-bind-group! rp 0 bind)
+                (w3/draw! rp 3))
+            (draw-geom rp pipe bind))
           (w3/end-pass! rp)))
       (w3/submit! queue [(w3/finish! enc)])))))
 

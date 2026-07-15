@@ -20,7 +20,7 @@
     (is (= 5 (count (get-in resolved [:graph :passes]))))
     (is (= [:post-process]
            (mapv :feature (:degraded resolved))))
-    (is (= [:tone-map] (get-in resolved [:effective :post-process])))
+    (is (= [:bloom :tone-map] (get-in resolved [:effective :post-process])))
     (is (= (:lod plan) (get-in resolved [:effective :lod])))))
 
 (deftest rejects-unversioned-data

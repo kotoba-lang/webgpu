@@ -17,6 +17,9 @@
     (println "  skip: naga not installed")
     (do
       (is (naga-valid? "cascaded_lit" (shaders/cascaded-lit-shader)))
+      (is (naga-valid? "cascaded_hdr" (shaders/cascaded-hdr-shader)))
+      (is (naga-valid? "bloom" (shaders/bloom-shader)))
+      (is (naga-valid? "hdr_composite" (shaders/hdr-composite-shader)))
       (doseq [cascade (range 4)]
         (is (naga-valid? (str "cascade_depth_" cascade)
                          (shaders/cascaded-shadow-shader cascade)))))))
