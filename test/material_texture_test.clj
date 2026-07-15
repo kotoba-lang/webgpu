@@ -1,0 +1,24 @@
+(ns material-texture-test
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is run-tests]]
+            [kotoba.render.texture :as texture]))
+
+(deftest common-mip-chain-contract
+  (let [base (vec (mapcat identity [[255 0 0 255] [0 255 0 255]
+                                    [0 0 255 255] [255 255 255 255]]))
+        levels (texture/generate-mipmaps-cpu base 2 2
+                                             (texture/mip-level-count 2 2))]
+    (is (= 2 (texture/mip-level-count 2 2)))
+    (is (= [{:level 1 :width 1 :height 1 :data [127 127 127 255]}]
+           levels))))
+
+(deftest webgpu-host-uploads-and-samples-mips
+  (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
+    (is (str/includes? source ":mipLevelCount mip-level-count"))
+    (is (str/includes? source ":mipLevel level"))
+    (is (str/includes? source ":maxAnisotropy 8"))))
+
+(let [{:keys [fail error]} (run-tests 'material-texture-test)]
+  (when (pos? (+ fail error))
+    (throw (ex-info "material texture gate failed" {:fail fail :error error}))))
