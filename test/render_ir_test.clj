@@ -88,6 +88,19 @@
   (is (= (geom/box 1 1 1) (ir/mesh-from-spec {:type :box})))
   (is (= (geom/box 1 1 1) (ir/mesh-from-spec {:type :teapot}))))
 
+(deftest generic-registered-mesh-enters-the-existing-geometry-library
+  (let [mesh {:positions [[0 1 0] [-1 0 0] [1 0 0]]
+              :normals [[0 0 1] [0 0 1] [0 0 1]]
+              :uvs [[0.5 0] [0 1] [1 1]]
+              :indices [0 1 2]}
+        spec {:type :mesh :mesh mesh
+              :bounds {:min [-1 0 0] :max [1 1 0]}}]
+    (is (= mesh (ir/mesh-from-spec spec)))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"invalid registered geometry mesh"
+         (ir/mesh-from-spec {:type :mesh
+                             :mesh (assoc mesh :indices [0 1 3])})))))
+
 (deftest authoring-a-fully-custom-look-is-pure-data
   ;; executable documentation: a game authoring a whole custom look — warmer dusk lighting,
   ;; a wider sun frustum, a tighter camera — is just data merged over the defaults, and the
