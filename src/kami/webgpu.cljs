@@ -17,6 +17,7 @@
             [kami.webgpu.quality :as quality]
             [kotoba.webgl :as webgl]
             [kotoba.render.environment :as render-environment]
+            [kotoba.render.instance :as render-instance]
             [kotoba.render.mesh :as render-mesh]
             [kotoba.render.texture :as render-texture]
             [kotoba.shaders :as shaders]
@@ -216,7 +217,8 @@
 ;; the same value so typical scenes (<16384 instances) still pay zero extra
 ;; buffer churn versus before this fix.
 (def ^:private INITIAL-INST-CAPACITY 16384)
-(def ^:private INST-STRIDE 96)   ;; bytes/instance: model(16)+color(4)+material(4) floats
+(def ^:private INST-FLOATS 28)
+(def ^:private INST-STRIDE (* 4 INST-FLOATS))
 
 (defn- mk-inst-buffer [device capacity]
   (w3/create-buffer! device #js {:size (* capacity INST-STRIDE)
@@ -241,13 +243,14 @@
         {:buf buf' :grew? true}))))
 
 (defn- vattr [fmt off loc] #js {:format fmt :offset off :shaderLocation loc})
-(defn- vlayout []   ;; mesh(pos+normal+uv+tangent, stride 48) + instance(..., stride 96)
+(defn- vlayout []   ;; mesh(pos+normal+uv+tangent, stride 48) + instance(..., stride 112)
   #js [#js {:arrayStride 48
             :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)
                              (vattr "float32x2" 24 8) (vattr "float32x4" 32 9)]}
-       #js {:arrayStride 96 :stepMode "instance"
+       #js {:arrayStride 112 :stepMode "instance"
             :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3) (vattr "float32x4" 32 4)
-                             (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)]}])
+                             (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)
+                             (vattr "float32x4" 96 10)]}])
 
 (defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen]}]
   (let [mod (w3/create-shader-module! device #js {:code (get shaders shader)})
@@ -534,13 +537,15 @@
   "Write one instance directly into the shared Float32Array. This is the
   closed-form T*Ry*S matrix used by model-mat, avoiding three temporary
   matrices, two matrix multiplies, and two clj->js arrays per instance."
-  [idata i {:keys [pos color size yaw metallic roughness emissive textured? texture-layer]}]
+  [idata i {:keys [pos color size yaw metallic roughness emissive textured? texture-layer uv-transform]}]
   (let [[x y z] pos
         [w h] (or size [1 1])
         yaw (or yaw 0)
         c (js/Math.cos yaw)
         s (js/Math.sin yaw)
-        base (* i 24)]
+        [uv-scale-u uv-scale-v uv-offset-u uv-offset-v]
+        (render-instance/normalize-uv-transform uv-transform)
+        base (* i INST-FLOATS)]
     ;; column-major translate(pos + up*h/2) * rotateY(yaw) * scale(w,h,w)
     (aset idata base (* c w))
     (aset idata (+ base 1) 0)
@@ -568,7 +573,11 @@
     (aset idata (+ base 23) (cond
                               (some? texture-layer) (double (inc texture-layer))
                               textured? 1.0
-                              :else 0.0))))
+                              :else 0.0))
+    (aset idata (+ base 24) uv-scale-u)
+    (aset idata (+ base 25) uv-scale-v)
+    (aset idata (+ base 26) uv-offset-u)
+    (aset idata (+ base 27) uv-offset-v)))
 
 (defn- compute-instance-data
   "Pure: bucket instances by geometry kind (so each kind's instances are
@@ -612,7 +621,7 @@
               (recur (inc i) (conj acc [geo c at])))))
         n (max 1 (count insts))
         [cxx czz] [(/ (cz 0) n) (/ (cz 1) n)]
-        idata (js/Float32Array. (* (count insts) 24))]   ;; model(16)+color(4)+material(4)
+        idata (js/Float32Array. (* (count insts) INST-FLOATS))]
     (dotimes [i (count insts)]
       (pack-instance! idata i (nth insts i)))
     {:raw-instances raw-instances :insts insts :geo-groups geo-groups :cxx cxx :czz czz :idata idata}))
