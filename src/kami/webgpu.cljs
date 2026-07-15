@@ -119,6 +119,12 @@
 
 ;; --- the render graph, as EDN data -------------------------------------------
 
+(def ^:private HDR-FORMAT
+  ;; Packed 32-bit floating-point HDR keeps the linear light range required by
+  ;; bloom/ACES while halving render-target bandwidth versus rgba16float. The
+  ;; post stack does not use alpha, so the missing alpha channel is intentional.
+  "rg11b10ufloat")
+
 (def default-graph
   "The frame, described as data. :passes is an ordered array — the shadow pass renders
    depth into the :shadow target, then the main pass draws to the screen sampling it.
@@ -131,8 +137,8 @@
                :depth2 (shaders/cascaded-shadow-shader 2)
                :depth3 (shaders/cascaded-shadow-shader 3)}
    :targets   {:shadow {:depth "depth32float" :size [2048 2048 4] :layers 4}
-               :hdr {:color "rgba16float" :scale 1.0}
-               :bloom {:color "rgba16float" :scale 0.5}}
+               :hdr {:color HDR-FORMAT :scale 1.0}
+               :bloom {:color HDR-FORMAT :scale 0.5}}
    :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}
                :linear {:magFilter "linear" :minFilter "linear"}}
    :pipelines {:shadow0 {:shader :depth0 :cull "back"
@@ -147,10 +153,10 @@
                :shadow3 {:shader :depth3 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
                          :binds [:uniform]}
-               :main   {:shader :lit :cull "back" :color "rgba16float"
+               :main   {:shader :lit :cull "back" :color HDR-FORMAT
                         :depth {:format "depth24plus" :write true :compare "less-equal"}
                         :binds [:uniform {:texture :shadow} {:sampler :comparison}]}
-               :bloom {:shader :bloom :fullscreen true :color "rgba16float"
+               :bloom {:shader :bloom :fullscreen true :color HDR-FORMAT
                        :binds [{:texture :hdr} {:sampler :linear}]}
                :composite {:shader :composite :fullscreen true :color :screen
                            :binds [{:texture :hdr} {:texture :bloom} {:sampler :linear}]}}
