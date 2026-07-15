@@ -20,6 +20,10 @@
     (is (str/includes? source ":dimension \"2d-array\""))
     (is (str/includes? source ":origin #js [0 0 layer]"))
     (is (str/includes? source "(double (inc texture-layer))"))
+    (is (str/includes? source ":dimension \"cube\""))
+    (is (str/includes? source "render-environment/neutral-pbr-environment"))
+    (is (str/includes? source ":prefiltered-specular"))
+    (is (str/includes? source ":brdf-lut"))
     (is (str/includes? source ":maxAnisotropy 8"))))
 
 (let [{:keys [fail error]} (run-tests 'material-texture-test)]
