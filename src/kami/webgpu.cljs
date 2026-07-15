@@ -206,7 +206,7 @@
         desc #js {:layout "auto"
                   :vertex #js {:module mod :entryPoint "vs"
                                :buffers (if fullscreen #js [] (vlayout))}
-                  :primitive #js {:cullMode (if fullscreen "none" (or cull "back"))}}
+                  :primitive #js {:cullMode (if fullscreen "none" (or cull "back"))}}]
     (when depth
       (set! (.-depthStencil desc)
             #js {:format (:format depth) :depthWriteEnabled (boolean (:write depth))
