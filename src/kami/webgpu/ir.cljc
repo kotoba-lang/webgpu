@@ -33,7 +33,8 @@
    it understands and ignores the rest."
   (:require [kami.webgpu.geometry :as geom]
             [kotoba.render.building :as building]
-            [kotoba.render.terrain :as terrain]))
+            [kotoba.render.terrain :as terrain]
+            [kotoba.render.road :as road]))
 
 (defn material
   "A PBR material — pure data. metallic 0=dielectric…1=metal; roughness 0=mirror…1=matte;
@@ -142,6 +143,20 @@
      :uvs (mapv vec (partition 2 uvs))
      :indices indices}))
 
+(defn- road-ribbon-geometry [{:keys [detail part] :as spec}]
+  (let [road-spec (select-keys spec [:path :width :shoulder :camber :shoulder-drop
+                                      :clearance :uv-scale :base-subdivisions
+                                      :miter-limit :terrain])
+        parts (road/road-mesh-parts road-spec (or detail :high))
+        [positions normals uvs indices]
+        (or (get parts (or part :surface))
+            (throw (ex-info "unsupported road ribbon material part"
+                            {:part part :supported (set (keys parts))})))]
+    {:positions (mapv vec (partition 3 positions))
+     :normals (mapv vec (partition 3 normals))
+     :uvs (mapv vec (partition 2 uvs))
+     :indices indices}))
+
 (defn mesh-from-spec
   "Bake one geometry spec → a mesh {:positions :normals :indices}. Pure + cross-platform
    (a native executor reimplements this dispatch over the same data). Unknown :type → unit box."
@@ -154,6 +169,7 @@
     :building (building-geometry spec)
     :mesh     (registered-mesh spec)
     :terrain  (terrain-geometry spec)
+    :road-ribbon (road-ribbon-geometry spec)
     (geom/box 1 1 1)))
 
 (defn instance

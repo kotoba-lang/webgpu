@@ -122,6 +122,16 @@ Heightfield patches can be registered directly without backend-specific code:
 
 Both WebGPU and WebGL call the same `ir/mesh-from-spec` terrain baker.
 
+Terrain-following roads use the same backend-neutral dispatch. `:part` selects
+the independently materialed asphalt surface or soil shoulder:
+
+```clojure
+{:type :road-ribbon :part :surface :detail :high
+ :path [[0 0] [24 0] [36 12]] :width 8 :shoulder 1.5
+ :camber 0.12 :shoulder-drop 0.08 :base-subdivisions 8 :miter-limit 1.75
+ :terrain {:size 64 :base-segments 32 :amplitude 8 :seed 7}}
+```
+
 ```clojure
 ;; a warmer dusk look + a wider shadow frustum + a custom mesh kind — all data:
 (gpu/init! canvas {:geometry (assoc ir/default-geometry :slab {:type :box :size [3 0.3 3]})})
