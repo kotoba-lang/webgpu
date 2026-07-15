@@ -264,31 +264,40 @@
                           (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
                       binds))}))
 
-(defn- upload-rgba8-texture!
-  "Upload the common :kotoba.render/texture-rgba8-v1 descriptor and return the
-   same resource shape used by graph targets. A complete CPU-generated mip
-   chain is uploaded so minification is stable on distant geometry."
-  [device queue {:keys [width height data color-space schema]}]
-  (when-not (= schema :kotoba.render/texture-rgba8-v1)
-    (throw (ex-info "unsupported material texture descriptor" {:schema schema})))
-  (let [format (if (= color-space :srgb) "rgba8unorm-srgb" "rgba8unorm")
-        mip-level-count (render-texture/mip-level-count width height)
-        levels (into [{:level 0 :width width :height height :data data}]
-                     (render-texture/generate-mipmaps-cpu
-                      data width height mip-level-count))
+(defn- upload-rgba8-texture-array!
+  "Upload one PBR channel across all material layers with complete mip chains."
+  [device queue descriptors]
+  (let [{array-width :width array-height :height array-space :color-space}
+        (first descriptors)
+        _ (doseq [{:keys [schema width height color-space] :as descriptor} descriptors]
+            (when-not (and (= schema :kotoba.render/texture-rgba8-v1)
+                           (= array-width width) (= array-height height)
+                           (= array-space color-space))
+              (throw (ex-info "incompatible PBR texture-array layer"
+                              {:descriptor descriptor}))))
+        layer-count (count descriptors)
+        format (if (= array-space :srgb) "rgba8unorm-srgb" "rgba8unorm")
+        mip-level-count (render-texture/mip-level-count array-width array-height)
         tex (w3/create-texture!
-             device #js {:size #js [width height 1]
+             device #js {:size #js [array-width array-height layer-count]
                          :mipLevelCount mip-level-count
                          :format format
                          :usage (bit-or (w3/texture-usage :texture-binding)
                                         (w3/texture-usage :copy-dst))})]
-    (doseq [{:keys [level width height data]} levels]
-      (w3/write-texture! queue #js {:texture tex :mipLevel level}
+    (doseq [[layer descriptor] (map-indexed vector descriptors)
+            {:keys [level width height data]}
+            (into [{:level 0 :width array-width :height array-height :data (:data descriptor)}]
+                  (render-texture/generate-mipmaps-cpu
+                   (:data descriptor) array-width array-height mip-level-count))]
+      (w3/write-texture! queue #js {:texture tex :mipLevel level
+                                    :origin #js [0 0 layer]}
                          (js/Uint8Array. (clj->js data))
                          #js {:offset 0 :bytesPerRow (* width 4) :rowsPerImage height}
                          #js [width height 1]))
-    {:tex tex :view (w3/create-view tex) :format format
-     :width width :height height :mip-level-count mip-level-count}))
+    {:tex tex :view (w3/create-view tex #js {:dimension "2d-array"
+                                             :arrayLayerCount layer-count})
+     :format format :width array-width :height array-height :layer-count layer-count
+     :mip-level-count mip-level-count}))
 
 (defn- init-webgl-fallback! [canvas opts]
   (if-let [viewport (webgl/init-mesh-viewport! canvas)]
@@ -305,6 +314,7 @@
                      :quality-plan <:kotoba.render/quality-v1 EDN>
                      :material-textures {:albedo/:normal/:metallic-roughness
                                          <:kotoba.render/texture-rgba8-v1>}
+                     :material-texture-sets [<material texture set> ...]
                      :geometry <{:geo-kw {:type … params}} EDN>} —
    default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
@@ -380,12 +390,14 @@
                    direct-depth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
                    targets (assoc targets :direct-depth {:view (w3/create-view direct-depth)
                                                          :width w :height h :format "depth24plus"})
-                   texture-set (render-texture/pbr-texture-set (:material-textures opts))
+                   texture-library (render-texture/pbr-texture-library
+                                    (or (:material-texture-sets opts)
+                                        (:material-textures opts)))
                    material-resources
-                   (reduce-kv (fn [resources kind descriptor]
-                                (assoc resources kind
-                                       (upload-rgba8-texture! device q descriptor)))
-                              {} texture-set)
+                   (into {}
+                         (for [kind [:albedo :normal :metallic-roughness]]
+                           [kind (upload-rgba8-texture-array!
+                                  device q (mapv kind texture-library))]))
                    targets (merge targets material-resources)
                    ;; pipelines + bind groups, from EDN
                    pipelines (reduce-kv
@@ -403,7 +415,8 @@
                 :material-textures (into {}
                                          (map (fn [[kind resource]]
                                                 [kind (select-keys resource [:format :width :height
-                                                                             :mip-level-count])]))
+                                                                             :mip-level-count
+                                                                             :layer-count])]))
                                          material-resources)
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
@@ -416,7 +429,10 @@
                 ;; a static scene's per-frame cost from O(instance count) back to O(1).
                 ;; See [[compute-instance-data]]/[[draw!]].
                 :instance-cache (atom nil)})))
-         (.catch (fn [_] (init-webgl-fallback! canvas opts)))))))
+         (.catch (fn [error]
+                   (js/console.error "WebGPU initialization failed; using WebGL2" error)
+                   (-> (init-webgl-fallback! canvas opts)
+                       (.then #(assoc % :webgpu-init-error (str error))))))))))
 
 (defn- arr3 [m k d] (or (get m k) d))
 
@@ -424,7 +440,7 @@
   "Write one instance directly into the shared Float32Array. This is the
   closed-form T*Ry*S matrix used by model-mat, avoiding three temporary
   matrices, two matrix multiplies, and two clj->js arrays per instance."
-  [idata i {:keys [pos color size yaw metallic roughness emissive textured?]}]
+  [idata i {:keys [pos color size yaw metallic roughness emissive textured? texture-layer]}]
   (let [[x y z] pos
         [w h] (or size [1 1])
         yaw (or yaw 0)
@@ -455,7 +471,10 @@
     (aset idata (+ base 20) (or metallic 0.0))
     (aset idata (+ base 21) (or roughness 0.65))
     (aset idata (+ base 22) (or emissive 0.0))
-    (aset idata (+ base 23) (if textured? 1.0 0.0))))
+    (aset idata (+ base 23) (cond
+                              (some? texture-layer) (double (inc texture-layer))
+                              textured? 1.0
+                              :else 0.0))))
 
 (defn- compute-instance-data
   "Pure: bucket instances by geometry kind (so each kind's instances are
@@ -686,6 +705,13 @@
   "Uploaded PBR texture formats and dimensions (never includes pixel data)."
   [ctx]
   (:material-textures ctx))
+
+(defn backend-evidence
+  "Renderer backend and any WebGPU initialization failure. Capture gates use
+   this to prevent a visually plausible WebGL fallback from claiming WebGPU."
+  [ctx]
+  {:backend (:backend ctx)
+   :webgpu-init-error (:webgpu-init-error ctx)})
 
 (defn- draw-webgl! [{:keys [geos width height instance-cache] :as viewport} render-ir]
   (let [instances (:instances render-ir)

@@ -17,6 +17,9 @@
   (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
     (is (str/includes? source ":mipLevelCount mip-level-count"))
     (is (str/includes? source ":mipLevel level"))
+    (is (str/includes? source ":dimension \"2d-array\""))
+    (is (str/includes? source ":origin #js [0 0 layer]"))
+    (is (str/includes? source "(double (inc texture-layer))"))
     (is (str/includes? source ":maxAnisotropy 8"))))
 
 (let [{:keys [fail error]} (run-tests 'material-texture-test)]
