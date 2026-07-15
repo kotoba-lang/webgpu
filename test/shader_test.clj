@@ -32,7 +32,9 @@ fn fs(i: VO) -> @location(0) vec4<f32> {
         + specTint * g.sun_col.rgb * spec * sh
         + g.sky.rgb * rim
         + i.col * emissive;
-  c = c / (c + vec3<f32>(1.0));
+  c = clamp((c * (2.51*c + vec3<f32>(0.03))) /
+            (c * (2.43*c + vec3<f32>(0.59)) + vec3<f32>(0.14)),
+            vec3<f32>(0.0), vec3<f32>(1.0));
   c = pow(c, vec3<f32>(1.0/g.light_d.x));
   return vec4<f32>(c, 1.0);
 }")

@@ -6,7 +6,9 @@
   {:backend :webgpu
    :pbr #{:base-color :metallic :roughness :emissive}
    :shadow {:directional true :max-cascades 1 :max-resolution 4096 :pcf-radius 1}
-   :post-process #{}
+   ;; ACES is currently fused into the lit fragment shader. Multi-pass effects
+   ;; remain absent until the HDR intermediate frame graph lands.
+   :post-process #{:tone-map}
    :lod #{:consumer-culling :instance-budget :triangle-budget}})
 
 (defn quality-plan? [plan]
@@ -24,6 +26,7 @@
         resolution (min (or (:resolution requested-shadow) 2048)
                         (get-in capabilities [:shadow :max-resolution]))
         post-kinds (mapv :kind (get-in plan [:post-process :passes]))
+        supported-post (vec (filter (:post-process capabilities) post-kinds))
         unsupported-post (vec (remove (:post-process capabilities) post-kinds))
         graph' (if shadow-enabled?
                  (assoc-in graph [:targets :shadow :size] [resolution resolution])
@@ -40,7 +43,7 @@
     {:graph graph'
      :quality-plan plan
      :effective {:shadow {:enabled? true :cascades 1 :resolution resolution}
-                 :post-process []
+                 :post-process supported-post
                  :lod (:lod plan)}
      :degraded degraded
      :capabilities capabilities}))
