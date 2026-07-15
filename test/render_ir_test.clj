@@ -127,6 +127,22 @@
                                                :layers custom-layers)})]
     (is (every? #{[4 0 7]} (:biome-layer-indices mesh)))))
 
+(deftest uploaded-geometry-biome-evidence-reports-counts-and-generic-layer-mappings
+  (let [custom-layers (mapv #(assoc %1 :texture-layer %2)
+                            (:layers terrain-biome/default-biome) [4 0 7])
+        meshes {:ordinary (ir/mesh-from-spec {:type :box})
+                :default-terrain (ir/mesh-from-spec {:type :terrain :base-segments 4})
+                :custom-terrain (ir/mesh-from-spec
+                                 {:type :terrain :base-segments 4
+                                  :biome (assoc terrain-biome/default-biome
+                                                :layers custom-layers)})}
+        evidence (ir/geometry-biome-evidence meshes)]
+    (is (= 2 (:uploaded-biome-mesh-count evidence)))
+    (is (= (+ (count (:positions (:default-terrain meshes)))
+              (count (:positions (:custom-terrain meshes))))
+           (:uploaded-biome-vertex-count evidence)))
+    (is (= [[2 1 3] [4 0 7]] (:layer-index-mappings evidence)))))
+
 (deftest terrain-road-ribbons-dispatch-material-parts-and-lods
   (let [base {:type :road-ribbon
               :path [[0.0 0.0] [20.0 0.0] [28.0 12.0]]
