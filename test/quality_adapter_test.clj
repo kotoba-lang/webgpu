@@ -14,6 +14,7 @@
     (is (= 1 (get-in resolved [:effective :shadow :cascades])))
     (is (= [:shadow-cascades :post-process]
            (mapv :feature (:degraded resolved))))
+    (is (= [:tone-map] (get-in resolved [:effective :post-process])))
     (is (= (:lod plan) (get-in resolved [:effective :lod])))))
 
 (deftest rejects-unversioned-data
