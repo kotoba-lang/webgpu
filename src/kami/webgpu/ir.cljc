@@ -91,7 +91,9 @@
 (def default-geometry
   {:box      {:type :box      :size [1 1 1]}
    :sphere   {:type :sphere   :r 0.5 :rings 14 :sectors 20}
-   :cylinder {:type :cylinder :r 0.5 :h 1 :sectors 20}})
+   :sphere-lod1 {:type :sphere :r 0.5 :rings 6 :sectors 10}
+   :cylinder {:type :cylinder :r 0.5 :h 1 :sectors 20}
+   :cylinder-lod1 {:type :cylinder :r 0.5 :h 1 :sectors 8}})
 
 (defn mesh-from-spec
   "Bake one geometry spec → a mesh {:positions :normals :indices}. Pure + cross-platform

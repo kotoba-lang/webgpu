@@ -277,6 +277,7 @@
                 :targets targets :pipelines pipelines :graph graph
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
+                :lod-state (atom {}) :lod-evidence (atom nil)
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
                 ;; SAME value (by reference) across draw! calls in normal use (compose
                 ;; the render-IR once, call draw! every rAF) — caching the sort/group/
@@ -392,17 +393,28 @@
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
   [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph
-           geos instance-cache quality-resolution density-evidence]} ir]
+           geos instance-cache quality-resolution density-evidence lod-state lod-evidence]} ir]
   (let [raw-instances (:instances ir)
         lod (get-in quality-resolution [:effective :lod])
         authored-eye (get-in ir [:globals :eye])
+        fov (or (get-in ir [:globals :fov]) 60)
+        lod-result (if lod
+                     (quality/apply-lod raw-instances authored-eye
+                                        (/ (* fov js/Math.PI) 180.0) h
+                                        (:bias lod) @lod-state)
+                     {:instances raw-instances :state @lod-state
+                      :switched-count 0 :levels {}})
+        _ (reset! lod-state (:state lod-result))
+        _ (some-> lod-evidence
+                  (reset! (select-keys lod-result [:switched-count :levels])))
+        lod-instances (:instances lod-result)
         density (if lod
-                  (quality/density-plan raw-instances authored-eye lod)
-                  {:instances raw-instances :input-count (count raw-instances)
-                   :visible-count (count raw-instances) :culled-count 0
+                  (quality/density-plan lod-instances authored-eye lod)
+                  {:instances lod-instances :input-count (count lod-instances)
+                   :visible-count (count lod-instances) :culled-count 0
                    :budget-applied? false})
         selected-instances (:instances density)
-        density-key [authored-eye lod]
+        density-key [authored-eye fov h lod (:state lod-result)]
         _ (some-> density-evidence (reset! (dissoc density :instances)))
         cached (some-> instance-cache deref)
         cache-hit? (and cached
@@ -424,7 +436,7 @@
         eye (arr3 g :eye [(+ cxx 60) 80 (+ czz 60)])
         target (arr3 g :target [cxx 0 czz])
         ;; projection as data: FOV (deg) + near/far planes from globals (defaults = the old look)
-        fov (or (:fov g) 60) pnear (or (:near g) 0.5) pfar (or (:far g) 4000)
+        pnear (or (:near g) 0.5) pfar (or (:far g) 4000)
         vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ w (max 1 h)) pnear pfar)
                    (look-at (vec eye) (vec target) [0 1 0]))
         sl (let [l (js/Math.hypot (sun-dir 0) (sun-dir 1) (sun-dir 2)) l (if (< l 1e-6) 1.0 l)]
@@ -531,3 +543,8 @@
   "Last WebGPU frame's explicit density-budget result, without instance data."
   [ctx]
   (some-> (:density-evidence ctx) deref))
+
+(defn lod-evidence
+  "Last WebGPU frame's selected geometry counts and hysteresis switches."
+  [ctx]
+  (some-> (:lod-evidence ctx) deref))

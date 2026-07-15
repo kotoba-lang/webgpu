@@ -36,6 +36,17 @@
     (is (identical? instances (:instances result)))
     (is (false? (:budget-applied? result)))))
 
+(deftest selects-mesh-lod-with-hysteresis
+  (let [instances [{:id :ball :geo :sphere :pos [0 0 100] :size [2 2]}]
+        low (quality/apply-lod instances [0 0 0] (/ Math/PI 3) 1080 1.0 {})
+        held (quality/apply-lod instances [0 0 0] (/ Math/PI 3) 1080 4.0 (:state low))
+        high (quality/apply-lod instances [0 0 0] (/ Math/PI 3) 1080 5.0 (:state held))]
+    (is (= :sphere-lod1 (get-in low [:instances 0 :geo])))
+    (is (= :sphere-lod1 (get-in held [:instances 0 :geo]))
+        "15% hysteresis prevents threshold flicker")
+    (is (= :sphere (get-in high [:instances 0 :geo])))
+    (is (= {:sphere 1} (:levels high)))))
+
 (let [{:keys [fail error]} (run-tests 'quality-adapter-test)]
   (when (pos? (+ fail error))
     (throw (ex-info "quality adapter tests failed" {:fail fail :error error}))))
