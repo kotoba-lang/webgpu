@@ -12,7 +12,8 @@
    The heavy rasterization is the GPU's; CLJS only records light per-frame commands. This
    is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
    The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform)."
-  (:require [kami.webgpu.ir :as ir]
+  (:require [clojure.walk :as walk]
+            [kami.webgpu.ir :as ir]
             [kami.webgpu.quality :as quality]
             [kotoba.webgl :as webgl]
             [kotoba.render.environment :as render-environment]
@@ -132,6 +133,13 @@
   ;; bloom/ACES while halving render-target bandwidth versus rgba16float. The
   ;; post stack does not use alpha, so the missing alpha channel is intentional.
   "rg11b10ufloat")
+
+(def ^:private HDR-RENDERABLE-FEATURE "rg11b10ufloat-renderable")
+
+(defn- resolve-hdr-graph [graph packed-hdr?]
+  (if packed-hdr?
+    graph
+    (walk/postwalk-replace {HDR-FORMAT "rgba16float"} graph)))
 
 (def default-graph
   "The frame, described as data. :passes is an ordered array — the shadow pass renders
@@ -368,16 +376,23 @@
      (init-webgl-fallback! canvas opts)
      (-> (w3/request-adapter! (:adapter-options opts))
          (.then (fn [adapter]
-                  (if adapter (w3/request-device! adapter)
-                    (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
+                  (if-not adapter
+                    (js/Promise.reject (js/Error. "No WebGPU adapter available"))
+                    (let [packed-hdr? (.has (.-features adapter) HDR-RENDERABLE-FEATURE)
+                          descriptor (when packed-hdr?
+                                       #js {:requiredFeatures #js [HDR-RENDERABLE-FEATURE]})]
+                      (-> (w3/request-device! adapter descriptor)
+                          (.then (fn [device]
+                                   {:device device :packed-hdr? packed-hdr?})))))))
          (.then
-           (fn [device]
+           (fn [{:keys [device packed-hdr?]}]
              (let [gpu-errors (atom [])
                    _ (set! (.-onuncapturederror device)
                            (fn [event]
                              (swap! gpu-errors conj
                                     (str (some-> event .-error .-message)))))
-                   graph-base (or (:graph opts) default-graph)
+                   graph-base (resolve-hdr-graph (or (:graph opts) default-graph)
+                                                 packed-hdr?)
                    quality-resolution (when-let [plan (:quality-plan opts)]
                                         (quality/resolve-plan graph-base plan))
                    graph (or (:graph quality-resolution) graph-base)
@@ -469,6 +484,8 @@
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
                 :gpu-errors gpu-errors
                 :adapter-options (:adapter-options opts)
+                :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
+                :packed-hdr-feature? packed-hdr?
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
@@ -777,6 +794,8 @@
    this to prevent a visually plausible WebGL fallback from claiming WebGPU."
   [ctx]
   {:backend (:backend ctx)
+   :hdr-format (:hdr-format ctx)
+   :packed-hdr-feature? (:packed-hdr-feature? ctx)
    :force-fallback-adapter (boolean (some-> ctx :adapter-options
                                             (aget "forceFallbackAdapter")))
    :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
