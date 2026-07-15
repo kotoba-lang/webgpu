@@ -2,7 +2,12 @@
   (:require [clojure.test :refer [deftest is run-tests]]
             [kami.webgpu.quality :as quality]))
 
-(def graph {:targets {:shadow {:depth "depth32float" :size [2048 2048]}}})
+(def graph {:targets {:shadow {:depth "depth32float" :size [2048 2048]}}
+            :passes [{:pipeline :shadow0 :cascade 0}
+                     {:pipeline :shadow1 :cascade 1}
+                     {:pipeline :shadow2 :cascade 2}
+                     {:pipeline :shadow3 :cascade 3}
+                     {:pipeline :main}]})
 (def plan {:schema :kotoba.render/quality-v1
            :shadow {:enabled? true :cascades 4 :resolution 4096}
            :post-process {:passes [{:kind :ssao} {:kind :bloom} {:kind :tone-map}]}
@@ -10,9 +15,10 @@
 
 (deftest resolves-shared-plan-honestly
   (let [resolved (quality/resolve-plan graph plan)]
-    (is (= [4096 4096] (get-in resolved [:graph :targets :shadow :size])))
-    (is (= 1 (get-in resolved [:effective :shadow :cascades])))
-    (is (= [:shadow-cascades :post-process]
+    (is (= [4096 4096 4] (get-in resolved [:graph :targets :shadow :size])))
+    (is (= 4 (get-in resolved [:effective :shadow :cascades])))
+    (is (= 5 (count (get-in resolved [:graph :passes]))))
+    (is (= [:post-process]
            (mapv :feature (:degraded resolved))))
     (is (= [:tone-map] (get-in resolved [:effective :post-process])))
     (is (= (:lod plan) (get-in resolved [:effective :lod])))))

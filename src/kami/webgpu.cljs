@@ -111,11 +111,11 @@
 ;; uniform + shadow-map bindings, the PCF shadow fn, the VO varyings, the vertex and the fragment.
 ;; A bb token-equivalence gate (test/shader_test.clj) pins the generated WGSL to the on-screen-
 ;; verified original — identical token stream; only redundant grouping parens differ (always valid).
-(def SHADER (shaders/lit-shader))
+(def SHADER (shaders/cascaded-lit-shader))
 
 ;; depth-only shadow pass: render instances from the sun's POV into the shadow map.
 ;; the depth-only shadow pass — also generated from data (kami.shaders/shadow-shader).
-(def SHADOW-WGSL (shaders/shadow-shader))
+(def SHADOW-WGSL (shaders/cascaded-shadow-shader 0))
 
 ;; --- the render graph, as EDN data -------------------------------------------
 
@@ -124,16 +124,32 @@
    depth into the :shadow target, then the main pass draws to the screen sampling it.
    Reorder/add passes, swap shaders, or retarget by editing this map (or pass {:graph ...}
    to init!). Each pipeline's :binds wires its group-0 resources by name."
-  {:shaders   {:lit SHADER :depth SHADOW-WGSL}
-   :targets   {:shadow {:depth "depth32float" :size [2048 2048]}}
+  {:shaders   {:lit SHADER
+               :depth0 (shaders/cascaded-shadow-shader 0)
+               :depth1 (shaders/cascaded-shadow-shader 1)
+               :depth2 (shaders/cascaded-shadow-shader 2)
+               :depth3 (shaders/cascaded-shadow-shader 3)}
+   :targets   {:shadow {:depth "depth32float" :size [2048 2048 4] :layers 4}}
    :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}}
-   :pipelines {:shadow {:shader :depth :cull "back"
-                        :depth {:format "depth32float" :write true :compare "less"}
-                        :binds [:uniform]}
+   :pipelines {:shadow0 {:shader :depth0 :cull "back"
+                         :depth {:format "depth32float" :write true :compare "less"}
+                         :binds [:uniform]}
+               :shadow1 {:shader :depth1 :cull "back"
+                         :depth {:format "depth32float" :write true :compare "less"}
+                         :binds [:uniform]}
+               :shadow2 {:shader :depth2 :cull "back"
+                         :depth {:format "depth32float" :write true :compare "less"}
+                         :binds [:uniform]}
+               :shadow3 {:shader :depth3 :cull "back"
+                         :depth {:format "depth32float" :write true :compare "less"}
+                         :binds [:uniform]}
                :main   {:shader :lit :cull "back" :color :screen
                         :depth {:format "depth24plus" :write true :compare "less-equal"}
                         :binds [:uniform {:texture :shadow} {:sampler :comparison}]}}
-   :passes    [{:pipeline :shadow :depth :shadow      :clear-depth 1.0}
+   :passes    [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
+               {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
+               {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
+               {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
                {:pipeline :main   :color :screen :depth :screen-depth :clear :sky}]})
 
 ;; ADR-2607100100 M6: this used to be a hard cap — draw! silently `take`-ing
@@ -250,17 +266,28 @@
                                    {} geom-specs)
                    box (:box geos)
                    inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
-                   gbuf (w3/create-buffer! device #js {:size 240 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   gbuf (w3/create-buffer! device #js {:size 448 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
                    targets (reduce-kv
-                             (fn [m k {:keys [depth color size]}]
-                               (let [[tw th] (or size [w h])
+                             (fn [m k {:keys [depth color size layers]}]
+                               (let [[tw th size-layers] (or size [w h])
+                                     layers (or layers size-layers 1)
                                      f (or depth color)
-                                     tex (w3/create-texture! device #js {:size #js [tw th] :format f
-                                                                         :usage (bit-or (w3/texture-usage :render-attachment) (w3/texture-usage :texture-binding))})]
-                                 (assoc m k {:tex tex :view (w3/create-view tex) :format f})))
+                                     tex (w3/create-texture! device #js {:size #js [tw th layers] :format f
+                                                                         :usage (bit-or (w3/texture-usage :render-attachment) (w3/texture-usage :texture-binding))})
+                                     view (if (> layers 1)
+                                            (w3/create-view tex #js {:dimension "2d-array" :baseArrayLayer 0
+                                                                     :arrayLayerCount layers})
+                                            (w3/create-view tex))
+                                     layer-views (when (> layers 1)
+                                                   (mapv #(w3/create-view tex #js {:dimension "2d"
+                                                                                  :baseArrayLayer %
+                                                                                  :arrayLayerCount 1})
+                                                         (range layers)))]
+                                 (assoc m k {:tex tex :view view :layer-views layer-views
+                                             :layers layers :format f})))
                              {} (:targets graph))
                    sdepth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
                    targets (assoc targets :screen-depth {:view (w3/create-view sdepth) :format "depth24plus"})
@@ -441,29 +468,53 @@
                    (look-at (vec eye) (vec target) [0 1 0]))
         sl (let [l (js/Math.hypot (sun-dir 0) (sun-dir 1) (sun-dir 2)) l (if (< l 1e-6) 1.0 l)]
              [(/ (sun-dir 0) l) (/ (sun-dir 1) l) (/ (sun-dir 2) l)])
-        ;; sun shadow frustum as data: ortho extent + near/far + light distance (defaults = old)
+        ;; Cascaded sun frusta follow the camera. Each slice uses a conservative
+        ;; bounding sphere and its own light matrix; the shader selects by distance.
         shd (ir/shadow (:shadow g))
-        sdist (:distance shd) sext (:extent shd)
-        ltgt [cxx 0 czz]
-        leye [(- (ltgt 0) (* (sl 0) sdist)) (- (ltgt 1) (* (sl 1) sdist)) (- (ltgt 2) (* (sl 2) sdist))]
-        light-vp (m4-mul (ortho (- sext) sext (- sext) sext (:near shd) (:far shd)) (look-at leye ltgt [0 1 0]))
+        authored-splits (get-in quality-resolution [:effective :shadow :splits])
+        base-splits (if (seq authored-splits) authored-splits [48.0 128.0 320.0 800.0])
+        splits (loop [xs (vec (take 4 base-splits))]
+                 (if (= 4 (count xs)) xs
+                   (recur (conj xs (or (peek xs) 800.0)))))
+        view-dir (v-norm (v-sub target eye))
+        aspect (/ w (max 1 h))
+        tan-half (js/Math.tan (/ (* fov js/Math.PI) 360.0))
+        light-vps
+        (mapv (fn [cascade-far]
+                (let [center-distance (* cascade-far 0.55)
+                      center [(+ (eye 0) (* (view-dir 0) center-distance))
+                              (+ (eye 1) (* (view-dir 1) center-distance))
+                              (+ (eye 2) (* (view-dir 2) center-distance))]
+                      radius (max 12.0 (* cascade-far tan-half
+                                          (js/Math.sqrt (+ 1.0 (* aspect aspect)))))
+                      light-distance (+ (:distance shd) (* 2.0 radius))
+                      light-eye [(- (center 0) (* (sl 0) light-distance))
+                                 (- (center 1) (* (sl 1) light-distance))
+                                 (- (center 2) (* (sl 2) light-distance))]]
+                  (m4-mul (ortho (- radius) radius (- radius) radius
+                                 1.0 (+ light-distance (* 2.0 radius)))
+                          (look-at light-eye center [0 1 0]))))
+              splits)
         ;; lighting-model coefficients as data: merge the frame's :lighting over the defaults
         ;; (omitting it reproduces the original baked-in constants exactly — parity, no change).
         lt (ir/lighting (:lighting g))
         amb (arr3 lt :ambient [0.20 0.22 0.26])
-        gf (js/Float32Array. 60)]   ;; vp(16) sun_dir(4) sun_col(4) sky(4) light_vp(16) light_a/b/c/d(16)
+        gf (js/Float32Array. 112)]
     (.set gf vp 0)
     (.set gf (clj->js [(sun-dir 0) (sun-dir 1) (sun-dir 2) (nth eye 0)]) 16)
     (.set gf (clj->js [(sun 0) (sun 1) (sun 2) (nth eye 1)]) 20)
     (.set gf (clj->js [(horizon 0) (horizon 1) (horizon 2) (nth eye 2)]) 24)
-    (.set gf light-vp 28)
+    (doseq [[index light-vp] (map-indexed vector light-vps)]
+      (.set gf light-vp (+ 28 (* index 16))))
+    (.set gf (clj->js splits) 92)
     ;; light_a = [ambient.rgb, ambient-sky] · light_b = [spec-min spec-max rim rim-power]
     ;; light_c = [shininess-min shininess-max sun-diffuse metallic-diffuse-cut]
-    (.set gf (clj->js [(amb 0) (amb 1) (amb 2) (:ambient-sky lt)]) 44)
-    (.set gf (clj->js [(:spec-min lt) (:spec-max lt) (:rim lt) (:rim-power lt)]) 48)
-    (.set gf (clj->js [(:shininess-min lt) (:shininess-max lt) (:sun-diffuse lt) (:metallic-diffuse-cut lt)]) 52)
+    (.set gf (clj->js [(amb 0) (amb 1) (amb 2) (:ambient-sky lt)]) 96)
+    (.set gf (clj->js [(:spec-min lt) (:spec-max lt) (:rim lt) (:rim-power lt)]) 100)
+    (.set gf (clj->js [(:shininess-min lt) (:shininess-max lt) (:sun-diffuse lt) (:metallic-diffuse-cut lt)]) 104)
     ;; light_d = [gamma, shadow-bias-slope, shadow-bias-min, shadow-texel]
-    (.set gf (clj->js [(:gamma lt) (:shadow-bias-slope lt) (:shadow-bias-min lt) (:shadow-texel lt)]) 56)
+    (.set gf (clj->js [(:gamma lt) (:shadow-bias-slope lt) (:shadow-bias-min lt)
+                       (/ 1.0 (or (first (get-in graph [:targets :shadow :size])) 2048.0))]) 108)
     (w3/write-buffer! queue gbuf 0 gf)
     ;; grow the GPU instance buffer first if this frame's instance count
     ;; exceeds its current capacity (ADR-2607100100 M6) — then only
@@ -474,7 +525,11 @@
     (let [enc (w3/create-command-encoder! device)
           ninst (count insts)
           screen-view (w3/create-view (w3/current-texture ctx))
-          vw (fn [k] (if (= k :screen) screen-view (get-in targets [k :view])))
+          vw (fn [k layer]
+               (if (= k :screen) screen-view
+                 (if (some? layer)
+                   (get-in targets [k :layer-views layer])
+                   (get-in targets [k :view]))))
           draw-geom (fn [p pipe bnd]
                       (when (pos? ninst)
                         (w3/set-pipeline! p pipe) (w3/set-bind-group! p 0 bnd)
@@ -486,16 +541,16 @@
                             (w3/set-index-buffer! p gi "uint16")
                             (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
       ;; run the graph's passes in order (EDN-driven)
-      (doseq [{:keys [pipeline color depth clear clear-depth]} (:passes graph)]
+      (doseq [{:keys [pipeline color depth clear clear-depth cascade]} (:passes graph)]
         (let [{:keys [pipe bind]} (get pipelines pipeline)
               catts (if color
                       (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
-                        #js [#js {:view (vw color) :loadOp "clear" :storeOp "store"
+                        #js [#js {:view (vw color nil) :loadOp "clear" :storeOp "store"
                                   :clearValue #js {:r (c 0) :g (c 1) :b (c 2) :a 1}}])
                       #js [])
               rp (w3/begin-render-pass! enc
                    #js {:colorAttachments catts
-                        :depthStencilAttachment #js {:view (vw depth) :depthLoadOp "clear"
+                        :depthStencilAttachment #js {:view (vw depth cascade) :depthLoadOp "clear"
                                                      :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}})]
           (draw-geom rp pipe bind)
           (w3/end-pass! rp)))
