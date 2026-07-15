@@ -372,7 +372,12 @@
                     (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
          (.then
            (fn [device]
-             (let [graph-base (or (:graph opts) default-graph)
+             (let [gpu-errors (atom [])
+                   _ (set! (.-onuncapturederror device)
+                           (fn [event]
+                             (swap! gpu-errors conj
+                                    (str (some-> event .-error .-message)))))
+                   graph-base (or (:graph opts) default-graph)
                    quality-resolution (when-let [plan (:quality-plan opts)]
                                         (quality/resolve-plan graph-base plan))
                    graph (or (:graph quality-resolution) graph-base)
@@ -462,6 +467,7 @@
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
+                :gpu-errors gpu-errors
                 :adapter-options (:adapter-options opts)
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
@@ -773,7 +779,17 @@
   {:backend (:backend ctx)
    :force-fallback-adapter (boolean (some-> ctx :adapter-options
                                             (aget "forceFallbackAdapter")))
+   :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
    :webgpu-init-error (:webgpu-init-error ctx)})
+
+(defn settle!
+  "Promise resolved when all commands submitted before this call finish. Normal
+   render loops do not wait; deterministic capture uses this as a screenshot
+   barrier, which is essential for software WebGPU queues."
+  [ctx]
+  (if-let [queue (:queue ctx)]
+    (.onSubmittedWorkDone queue)
+    (js/Promise.resolve nil)))
 
 (defn environment-evidence
   "Uploaded split-sum IBL resource metadata (never pixel data)."
