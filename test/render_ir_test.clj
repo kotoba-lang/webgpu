@@ -125,7 +125,7 @@
         mesh (ir/mesh-from-spec {:type :terrain :base-segments 8 :amplitude 2 :seed 9
                                  :biome (assoc terrain-biome/default-biome
                                                :layers custom-layers)})]
-    (is (every? #{[4 0 7]} (:biome-layer-indices mesh))))
+    (is (every? #{[4 0 7]} (:biome-layer-indices mesh)))))
 
 (deftest terrain-road-ribbons-dispatch-material-parts-and-lods
   (let [base {:type :road-ribbon
