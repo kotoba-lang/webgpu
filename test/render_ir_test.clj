@@ -7,7 +7,8 @@
    data now, and the data is pinned to the historical render."
   (:require [clojure.test :refer [deftest is run-tests]]
             [kami.webgpu.ir :as ir]
-            [kami.webgpu.geometry :as geom]))
+            [kami.webgpu.geometry :as geom]
+            [kotoba.render.terrain-biome :as terrain-biome]))
 
 (deftest default-lighting-pins-the-original-shader-constants
   (let [d ir/default-lighting]
@@ -108,14 +109,41 @@
                      [:high :medium :low])
         triangles (mapv #(quot (count (:indices %)) 3) meshes)]
     (is (apply > triangles))
-    (doseq [{:keys [positions normals uvs biome-weights indices]} meshes]
+    (doseq [{:keys [positions normals uvs biome-weights biome-layer-indices indices]} meshes]
       (is (= (count positions) (count normals)))
       (is (= (count positions) (count uvs)))
       (is (= (count positions) (count biome-weights)))
       (is (every? #(= 3 (count %)) biome-weights))
       (is (every? #(< (Math/abs (- 1.0 (reduce + %))) 1.0e-9) biome-weights))
+      (is (= (repeat (count positions) [2 1 3]) biome-layer-indices))
       (is (every? #(< -1 % (count positions)) indices)))
     (is (= (first meshes) (ir/mesh-from-spec (assoc base :detail :high))))))
+
+(deftest terrain-biome-layer-indices-follow-custom-material-library-order
+  (let [custom-layers (mapv #(assoc %1 :texture-layer %2)
+                            (:layers terrain-biome/default-biome) [4 0 7])
+        mesh (ir/mesh-from-spec {:type :terrain :base-segments 8 :amplitude 2 :seed 9
+                                 :biome (assoc terrain-biome/default-biome
+                                               :layers custom-layers)})]
+    (is (every? #{[4 0 7]} (:biome-layer-indices mesh))))
+
+(deftest terrain-road-ribbons-dispatch-material-parts-and-lods
+  (let [base {:type :road-ribbon
+              :path [[0.0 0.0] [20.0 0.0] [28.0 12.0]]
+              :width 8.0 :shoulder 1.25 :camber 0.12 :shoulder-drop 0.08
+              :clearance 0.03 :uv-scale 6.0 :base-subdivisions 8 :miter-limit 1.75
+              :terrain {:patch [0 0] :size 64.0 :base-segments 32
+                        :amplitude 6.0 :seed 2654435769 :skirt-depth 2.0}}
+        high-surface (ir/mesh-from-spec (assoc base :detail :high :part :surface))
+        low-surface (ir/mesh-from-spec (assoc base :detail :low :part :surface))
+        shoulder (ir/mesh-from-spec (assoc base :detail :high :part :shoulder))]
+    (is (> (count (:indices high-surface)) (count (:indices low-surface))))
+    (doseq [{:keys [positions normals uvs indices]} [high-surface low-surface shoulder]]
+      (is (= (count positions) (count normals) (count uvs)))
+      (is (every? #(< -1 % (count positions)) indices)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                          #"unsupported road ribbon material part"
+                          (ir/mesh-from-spec (assoc base :part :marking))))))
 
 (deftest authoring-a-fully-custom-look-is-pure-data
   ;; executable documentation: a game authoring a whole custom look — warmer dusk lighting,

@@ -34,7 +34,8 @@
   (:require [kami.webgpu.geometry :as geom]
             [kotoba.render.building :as building]
             [kotoba.render.terrain :as terrain]
-            [kotoba.render.terrain-biome :as terrain-biome]))
+            [kotoba.render.terrain-biome :as terrain-biome]
+            [kotoba.render.road :as road]))
 
 (defn material
   "A PBR material — pure data. metallic 0=dielectric…1=metal; roughness 0=mirror…1=matte;
@@ -118,13 +119,14 @@
      :indices indices}))
 
 (defn- registered-mesh [{:keys [mesh]}]
-  (let [{:keys [positions normals biome-weights indices]} mesh
+  (let [{:keys [positions normals biome-weights biome-layer-indices indices]} mesh
         vertex-count (count positions)]
     (when-not (and (map? mesh)
                    (seq positions)
                    (seq indices)
                    (= vertex-count (count normals))
                    (or (nil? biome-weights) (= vertex-count (count biome-weights)))
+                   (or (nil? biome-layer-indices) (= vertex-count (count biome-layer-indices)))
                    (every? #(= 3 (count %)) positions)
                    (every? #(= 3 (count %)) normals)
                    (zero? (mod (count indices) 3))
@@ -132,7 +134,7 @@
       (throw (ex-info "invalid registered geometry mesh"
                       {:vertex-count vertex-count :normal-count (count normals)
                        :index-count (count indices)})))
-    (select-keys mesh [:positions :normals :uvs :biome-weights :indices])))
+    (select-keys mesh [:positions :normals :uvs :biome-weights :biome-layer-indices :indices])))
 
 (defn- terrain-geometry [{:keys [detail] :as spec}]
   (let [[positions normals uvs indices]
@@ -140,13 +142,31 @@
          (select-keys spec [:patch :size :base-segments :amplitude :seed :skirt-depth])
          (or detail :high))
         positions (mapv vec (partition 3 positions))
-        normals (mapv vec (partition 3 normals))]
+        normals (mapv vec (partition 3 normals))
+        biome (or (:biome spec) terrain-biome/default-biome)
+        by-id (into {} (map (juxt :id :texture-layer) (:layers biome)))
+        layer-indices (mapv by-id [:grass :soil :rock])]
     {:positions positions
      :normals normals
      :uvs (mapv vec (partition 2 uvs))
      :biome-weights (terrain-biome/mesh-weights
-                     (or (:biome spec) terrain-biome/default-biome)
+                     biome
                      [(vec (mapcat identity positions)) (vec (mapcat identity normals)) uvs indices])
+     :biome-layer-indices (vec (repeat (count positions) layer-indices))
+     :indices indices}))
+
+(defn- road-ribbon-geometry [{:keys [detail part] :as spec}]
+  (let [road-spec (select-keys spec [:path :width :shoulder :camber :shoulder-drop
+                                      :clearance :uv-scale :base-subdivisions
+                                      :miter-limit :terrain])
+        parts (road/road-mesh-parts road-spec (or detail :high))
+        [positions normals uvs indices]
+        (or (get parts (or part :surface))
+            (throw (ex-info "unsupported road ribbon material part"
+                            {:part part :supported (set (keys parts))})))]
+    {:positions (mapv vec (partition 3 positions))
+     :normals (mapv vec (partition 3 normals))
+     :uvs (mapv vec (partition 2 uvs))
      :indices indices}))
 
 (defn mesh-from-spec
@@ -161,6 +181,7 @@
     :building (building-geometry spec)
     :mesh     (registered-mesh spec)
     :terrain  (terrain-geometry spec)
+    :road-ribbon (road-ribbon-geometry spec)
     (geom/box 1 1 1)))
 
 (defn instance
