@@ -34,6 +34,7 @@
   (:require [kami.webgpu.geometry :as geom]
             [kotoba.render.building :as building]
             [kotoba.render.terrain :as terrain]
+            [kotoba.render.terrain-biome :as terrain-biome]
             [kotoba.render.road :as road]))
 
 (defn material
@@ -118,12 +119,14 @@
      :indices indices}))
 
 (defn- registered-mesh [{:keys [mesh]}]
-  (let [{:keys [positions normals indices]} mesh
+  (let [{:keys [positions normals biome-weights biome-layer-indices indices]} mesh
         vertex-count (count positions)]
     (when-not (and (map? mesh)
                    (seq positions)
                    (seq indices)
                    (= vertex-count (count normals))
+                   (or (nil? biome-weights) (= vertex-count (count biome-weights)))
+                   (or (nil? biome-layer-indices) (= vertex-count (count biome-layer-indices)))
                    (every? #(= 3 (count %)) positions)
                    (every? #(= 3 (count %)) normals)
                    (zero? (mod (count indices) 3))
@@ -131,16 +134,25 @@
       (throw (ex-info "invalid registered geometry mesh"
                       {:vertex-count vertex-count :normal-count (count normals)
                        :index-count (count indices)})))
-    (select-keys mesh [:positions :normals :uvs :indices])))
+    (select-keys mesh [:positions :normals :uvs :biome-weights :biome-layer-indices :indices])))
 
 (defn- terrain-geometry [{:keys [detail] :as spec}]
   (let [[positions normals uvs indices]
         (terrain/terrain-mesh
          (select-keys spec [:patch :size :base-segments :amplitude :seed :skirt-depth])
-         (or detail :high))]
-    {:positions (mapv vec (partition 3 positions))
-     :normals (mapv vec (partition 3 normals))
+         (or detail :high))
+        positions (mapv vec (partition 3 positions))
+        normals (mapv vec (partition 3 normals))
+        biome (or (:biome spec) terrain-biome/default-biome)
+        by-id (into {} (map (juxt :id :texture-layer) (:layers biome)))
+        layer-indices (mapv by-id [:grass :soil :rock])]
+    {:positions positions
+     :normals normals
      :uvs (mapv vec (partition 2 uvs))
+     :biome-weights (terrain-biome/mesh-weights
+                     biome
+                     [(vec (mapcat identity positions)) (vec (mapcat identity normals)) uvs indices])
+     :biome-layer-indices (vec (repeat (count positions) layer-indices))
      :indices indices}))
 
 (defn- road-ribbon-geometry [{:keys [detail part] :as spec}]
