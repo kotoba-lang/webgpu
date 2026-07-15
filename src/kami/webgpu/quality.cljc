@@ -23,7 +23,13 @@
   {:sphere [{:geo :sphere :min-pixels 36.0}
             {:geo :sphere-lod1 :min-pixels 0.0}]
    :cylinder [{:geo :cylinder :min-pixels 30.0}
-              {:geo :cylinder-lod1 :min-pixels 0.0}]})
+              {:geo :cylinder-lod1 :min-pixels 0.0}]
+   :stepped-tower [{:geo :stepped-tower :min-pixels 96.0}
+                   {:geo :stepped-tower-lod1 :min-pixels 32.0}
+                   {:geo :stepped-tower-lod2 :min-pixels 0.0}]
+   :industrial-block [{:geo :industrial-block :min-pixels 96.0}
+                      {:geo :industrial-block-lod1 :min-pixels 32.0}
+                      {:geo :industrial-block-lod2 :min-pixels 0.0}]})
 
 (defn projected-radius-px
   "Projected pixel radius for an instance bounding sphere."

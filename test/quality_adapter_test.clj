@@ -57,6 +57,14 @@
     (is (= :sphere (get-in high [:instances 0 :geo])))
     (is (= {:sphere 1} (:levels high)))))
 
+(deftest selects-building-silhouette-lods
+  (let [instance {:id :tower :geo :stepped-tower :pos [0 0 400]
+                  :size [8 24 6]}
+        low (quality/apply-lod [instance] [0 0 0] (/ Math/PI 3) 720 1.0 {})
+        near (quality/apply-lod [instance] [0 0 380] (/ Math/PI 3) 720 1.0 {})]
+    (is (= :stepped-tower-lod2 (get-in low [:instances 0 :geo])))
+    (is (= :stepped-tower (get-in near [:instances 0 :geo])))))
+
 (let [{:keys [fail error]} (run-tests 'quality-adapter-test)]
   (when (pos? (+ fail error))
     (throw (ex-info "quality adapter tests failed" {:fail fail :error error}))))
