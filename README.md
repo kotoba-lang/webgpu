@@ -7,6 +7,14 @@
 
 # kami-webgpu
 
+## Layer boundary
+
+`kotoba-lang/render` authors backend-neutral quality plans;
+`kotoba-lang/webgpu` resolves and executes KAMI render graphs; and
+`kotoba-lang/org-w3-webgpu` is only the raw W3C WebGPU JavaScript binding.
+See ADR 0002. `kami.webgpu.quality/resolve-plan` reports every unsupported
+effect instead of silently treating a requested quality tier as rendered.
+
 > 2026-07-02: [kotoba-lang/webgpu-rs](https://github.com/kotoba-lang/webgpu-rs)
 > はこのリポジトリに統合された（owner 指示）。`kotoba.webgpu-rs.*` — CPU 側
 > EDN render-IR ドメインロジック（render-IR parsing / scene.edn bridge /

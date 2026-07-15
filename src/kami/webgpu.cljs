@@ -13,6 +13,7 @@
    is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
    The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform)."
   (:require [kami.webgpu.ir :as ir]
+            [kami.webgpu.quality :as quality]
             [kotoba.webgl :as webgl]
             [kotoba.shaders :as shaders]
             [w3.webgpu :as w3]))
@@ -209,7 +210,9 @@
 
 (defn init!
   "Set up WebGPU on the canvas once from the render graph. Returns a Promise of a context.
-   opts (optional): {:graph <render-graph EDN> :geometry <{:geo-kw {:type … params}} EDN>} —
+   opts (optional): {:graph <render-graph EDN>
+                     :quality-plan <:kotoba.render/quality-v1 EDN>
+                     :geometry <{:geo-kw {:type … params}} EDN>} —
    default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
   ([canvas opts]
@@ -221,7 +224,10 @@
                     (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
          (.then
            (fn [device]
-             (let [graph (or (:graph opts) default-graph)
+             (let [graph-base (or (:graph opts) default-graph)
+                   quality-resolution (when-let [plan (:quality-plan opts)]
+                                        (quality/resolve-plan graph-base plan))
+                   graph (or (:graph quality-resolution) graph-base)
                    w (max 1 (.-clientWidth canvas)) h (max 1 (.-clientHeight canvas))
                    _ (set! (.-width canvas) w)
                    _ (set! (.-height canvas) h)
@@ -269,6 +275,7 @@
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
+                :quality-resolution quality-resolution
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
                 ;; SAME value (by reference) across draw! calls in normal use (compose
                 ;; the render-IR once, call draw! every rAF) — caching the sort/group/

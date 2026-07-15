@@ -22,6 +22,7 @@
                      (load-file "test/gpu_test.clj")
                      (load-file "test/sprite_gpu_test.clj")
                      (load-file "test/webgl_test.clj")
+                     (load-file "test/quality_adapter_test.clj")
                      (load-file "test/compute_golden_test.clj"))}
 
   verify {:doc     "Run repository-local CLJ/EDN surfaces: JVM .cljc tests."
