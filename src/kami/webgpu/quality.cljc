@@ -19,6 +19,72 @@
     (reduce + (map (fn [a b] (let [d (- a b)] (* d d))) eye pos))
     0.0))
 
+(def default-lods
+  {:sphere [{:geo :sphere :min-pixels 36.0}
+            {:geo :sphere-lod1 :min-pixels 0.0}]
+   :cylinder [{:geo :cylinder :min-pixels 30.0}
+              {:geo :cylinder-lod1 :min-pixels 0.0}]})
+
+(defn projected-radius-px
+  "Projected pixel radius for an instance bounding sphere."
+  [radius distance fov-radians viewport-height]
+  (if (or (not (pos? radius)) (not (pos? distance)) (not (pos? viewport-height)))
+    0.0
+    (/ (* radius viewport-height)
+       (* 2.0 distance (#?(:clj Math/tan :cljs js/Math.tan) (/ fov-radians 2.0))))))
+
+(defn- level-index [levels geo]
+  (first (keep-indexed #(when (= geo (:geo %2)) %1) levels)))
+
+(defn- target-level [levels pixels]
+  (or (first (filter #(>= pixels (:min-pixels % 0.0)) levels))
+      (last levels)))
+
+(defn- stable-level [levels pixels current-geo hysteresis]
+  (let [target (target-level levels pixels)
+        current-index (level-index levels current-geo)
+        target-index (level-index levels (:geo target))]
+    (if (or (nil? current-index) (= current-index target-index))
+      target
+      (let [boundary (:min-pixels (nth levels (min current-index target-index)))
+            moving-to-detail? (< target-index current-index)
+            crossed? (if moving-to-detail?
+                       (>= pixels (* boundary (+ 1.0 hysteresis)))
+                       (< pixels (* boundary (- 1.0 hysteresis))))]
+        (if crossed? target (nth levels current-index))))))
+
+(defn apply-lod
+  "Select authored `:lods` or built-in procedural-mesh LODs. `state` maps a
+   stable instance id (or source index) to its previous geometry for hysteresis."
+  [instances eye fov-radians viewport-height bias state]
+  (if-not eye
+    {:instances instances :state state :switched-count 0 :levels {}}
+    (let [result
+          (reduce-kv
+           (fn [{:keys [instances state switched-count]} index instance]
+             (let [levels (or (:lods instance) (get default-lods (:geo instance)))]
+               (if-not (seq levels)
+                 {:instances (conj instances instance) :state state :switched-count switched-count}
+                 (let [key (or (:id instance) index)
+                       [x y z] (:pos instance)
+                       [ex ey ez] eye
+                       distance (#?(:clj Math/sqrt :cljs js/Math.sqrt)
+                                 (+ (* (- x ex) (- x ex)) (* (- y ey) (- y ey)) (* (- z ez) (- z ez))))
+                       [width height] (or (:size instance) [1.0 1.0])
+                       radius (* 0.5 (max width height))
+                       pixels (* (or bias 1.0)
+                                 (projected-radius-px radius distance fov-radians viewport-height))
+                       previous (get state key (:geo instance))
+                       selected (stable-level levels pixels previous 0.15)
+                       geo (:geo selected)]
+                   {:instances (conj instances (assoc instance :geo geo :lod/pixels pixels))
+                    :state (assoc state key geo)
+                    :switched-count (+ switched-count (if (= previous geo) 0 1))}))))
+           {:instances [] :state state :switched-count 0}
+           (vec instances))
+          counts (frequencies (map :geo (:instances result)))]
+      (assoc result :levels counts))))
+
 (defn density-plan
   "Apply the effective instance/triangle budget. The common within-budget path
    preserves the original collection without sorting. Over budget, retain hero
