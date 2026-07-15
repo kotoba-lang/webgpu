@@ -276,6 +276,7 @@
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
                 :quality-resolution quality-resolution
+                :density-evidence (atom nil)
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
                 ;; SAME value (by reference) across draw! calls in normal use (compose
                 ;; the render-IR once, call draw! every rAF) — caching the sort/group/
@@ -390,13 +391,29 @@
    The GPU instance buffer itself grows (doubling) to fit however many
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
-  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph geos instance-cache]} ir]
-  (let [cached (some-> instance-cache deref)
-        cache-hit? (and cached (identical? (:instances ir) (:raw-instances cached)))
+  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph
+           geos instance-cache quality-resolution density-evidence]} ir]
+  (let [raw-instances (:instances ir)
+        lod (get-in quality-resolution [:effective :lod])
+        authored-eye (get-in ir [:globals :eye])
+        density (if lod
+                  (quality/density-plan raw-instances authored-eye lod)
+                  {:instances raw-instances :input-count (count raw-instances)
+                   :visible-count (count raw-instances) :culled-count 0
+                   :budget-applied? false})
+        selected-instances (:instances density)
+        density-key [authored-eye lod]
+        _ (some-> density-evidence (reset! (dissoc density :instances)))
+        cached (some-> instance-cache deref)
+        cache-hit? (and cached
+                        (identical? raw-instances (:source-instances cached))
+                        (= density-key (:density-key cached)))
         {:keys [insts geo-groups cxx czz idata]}
         (if cache-hit?
           cached
-          (let [fresh (compute-instance-data (:instances ir))]
+          (let [fresh (assoc (compute-instance-data selected-instances)
+                             :source-instances raw-instances
+                             :density-key density-key)]
             (some-> instance-cache (reset! fresh))
             fresh))
         g (:globals ir)
@@ -504,8 +521,13 @@
 (defn inst-buffer-capacity
   "How many instances the GPU instance buffer currently has room for
   (ADR-2607100100 M6) — an observability hook, not just for tests: lets a
-  caller confirm a scene's instance count never silently exceeds what's
-  actually being uploaded/drawn (`draw!` grows this as needed, so in normal
-  use `capacity >= (count (:instances ir))` always holds after a call)."
+  caller confirm the selected visible set fits the uploaded buffer. The
+  quality-plan density evidence distinguishes intentional budget culling from
+  capacity loss."
   [ctx]
   (:capacity @(:inst-buffer ctx)))
+
+(defn density-evidence
+  "Last WebGPU frame's explicit density-budget result, without instance data."
+  [ctx]
+  (some-> (:density-evidence ctx) deref))
