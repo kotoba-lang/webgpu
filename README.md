@@ -123,7 +123,7 @@ Heightfield patches can be registered directly without backend-specific code:
 Both WebGPU and WebGL call the same `ir/mesh-from-spec` terrain baker.
 
 Terrain-following roads use the same backend-neutral dispatch. `:part` selects
-the independently materialed asphalt surface or soil shoulder:
+the independently materialed asphalt surface, soil shoulder or lane marking:
 
 ```clojure
 {:type :road-ribbon :part :surface :detail :high
@@ -131,6 +131,10 @@ the independently materialed asphalt surface or soil shoulder:
  :camber 0.12 :shoulder-drop 0.08 :base-subdivisions 8 :miter-limit 1.75
  :terrain {:size 64 :base-segments 32 :amplitude 8 :seed 7}}
 ```
+
+`:part :marking` forwards the shared render contract's deterministic dash,
+phase, offset, clearance and per-LOD budget options without executor-specific
+geometry logic.
 
 ```clojure
 ;; a warmer dusk look + a wider shadow frustum + a custom mesh kind — all data:

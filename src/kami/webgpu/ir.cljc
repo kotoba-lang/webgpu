@@ -146,7 +146,7 @@
 (defn- road-ribbon-geometry [{:keys [detail part] :as spec}]
   (let [road-spec (select-keys spec [:path :width :shoulder :camber :shoulder-drop
                                       :clearance :uv-scale :base-subdivisions
-                                      :miter-limit :terrain])
+                                      :miter-limit :terrain :marking])
         parts (road/road-mesh-parts road-spec (or detail :high))
         [positions normals uvs indices]
         (or (get parts (or part :surface))
