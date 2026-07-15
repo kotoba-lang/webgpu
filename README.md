@@ -111,6 +111,17 @@ Shared procedural libraries may register a pre-baked portable mesh as
 The IR validates its vertex/index shape before WebGPU or WebGL upload; metadata
 such as `:bounds` can remain beside the mesh for culling and quality evidence.
 
+Heightfield patches can be registered directly without backend-specific code:
+
+```clojure
+(gpu/init! canvas
+ {:geometry {:island-high {:type :terrain :patch [0 0] :size 64
+                           :base-segments 32 :detail :high
+                           :amplitude 9 :seed 2654435769 :skirt-depth 3}}})
+```
+
+Both WebGPU and WebGL call the same `ir/mesh-from-spec` terrain baker.
+
 ```clojure
 ;; a warmer dusk look + a wider shadow frustum + a custom mesh kind — all data:
 (gpu/init! canvas {:geometry (assoc ir/default-geometry :slab {:type :box :size [3 0.3 3]})})
