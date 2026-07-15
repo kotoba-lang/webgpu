@@ -22,6 +22,7 @@
     (is (str/includes? source "(double (inc texture-layer))"))
     (is (str/includes? source ":dimension \"cube\""))
     (is (str/includes? source "render-environment/neutral-pbr-environment"))
+    (is (str/includes? source "(w3/request-adapter! (:adapter-options opts))"))
     (is (str/includes? source ":prefiltered-specular"))
     (is (str/includes? source ":brdf-lut"))
     (is (str/includes? source ":maxAnisotropy 8"))))
