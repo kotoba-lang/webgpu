@@ -130,7 +130,8 @@
    depth into the :shadow target, then the main pass draws to the screen sampling it.
    Reorder/add passes, swap shaders, or retarget by editing this map (or pass {:graph ...}
    to init!). Each pipeline's :binds wires its group-0 resources by name."
-  {:shaders   {:lit SHADER :bloom (shaders/bloom-shader)
+  {:shaders   {:lit SHADER :lit-direct (shaders/cascaded-lit-shader)
+               :bloom (shaders/bloom-shader)
                :composite (shaders/hdr-composite-shader)
                :depth0 (shaders/cascaded-shadow-shader 0)
                :depth1 (shaders/cascaded-shadow-shader 1)
@@ -159,6 +160,9 @@
                :main   {:shader :lit :cull "back" :color HDR-FORMAT
                         :depth {:format "depth24plus" :write true :compare "less-equal"}
                         :binds [:uniform {:texture :shadow} {:sampler :comparison}]}
+               :main-direct {:shader :lit-direct :cull "back" :color :screen
+                             :depth {:format "depth24plus" :write true :compare "less-equal"}
+                             :binds [:uniform {:texture :shadow} {:sampler :comparison}]}
                :bloom {:shader :bloom :fullscreen true :color HDR-FORMAT
                        :binds [{:texture :hdr} {:sampler :linear}]}
                :composite {:shader :composite :fullscreen true :color :screen
@@ -169,7 +173,16 @@
                {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
                {:pipeline :main :color :hdr :depth :screen-depth :clear :sky}
                {:pipeline :bloom :color :bloom :clear [0 0 0]}
-               {:pipeline :composite :color :screen :clear [0 0 0]}]})
+               {:pipeline :composite :color :screen :clear [0 0 0]}]
+   ;; Keep cinematic post-processing for ordinary scenes. At saturation,
+   ;; preserve PBR + cascaded shadows + ACES in one direct pass and shed only
+   ;; bloom/intermediate-target work that would otherwise back-pressure the GPU.
+   :adaptive-post {:max-instances 256
+                   :passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
+                            {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
+                            {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
+                            {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
+                            {:pipeline :main-direct :color :screen :depth :direct-depth :clear :sky}]}})
 
 ;; ADR-2607100100 M6: this used to be a hard cap — draw! silently `take`-ing
 ;; the first MAX-INST instances and dropping the rest, a correctness gap for
@@ -323,6 +336,9 @@
                    targets (assoc targets :screen-depth {:view (w3/create-view sdepth)
                                                          :width depth-w :height depth-h
                                                          :format "depth24plus"})
+                   direct-depth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
+                   targets (assoc targets :direct-depth {:view (w3/create-view direct-depth)
+                                                         :width w :height h :format "depth24plus"})
                    ;; pipelines + bind groups, from EDN
                    pipelines (reduce-kv
                                (fn [m k pd]
@@ -338,6 +354,7 @@
                 :targets targets :pipelines pipelines :graph graph
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
+                :post-evidence (atom nil)
                 :lod-state (atom {}) :lod-evidence (atom nil)
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
                 ;; SAME value (by reference) across draw! calls in normal use (compose
@@ -454,7 +471,7 @@
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
   [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph
-           geos instance-cache quality-resolution density-evidence lod-state lod-evidence]} ir]
+           geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence]} ir]
   (let [raw-instances (:instances ir)
         lod (get-in quality-resolution [:effective :lod])
         authored-eye (get-in ir [:globals :eye])
@@ -564,6 +581,13 @@
                  (if (some? layer)
                    (get-in targets [k :layer-views layer])
                    (get-in targets [k :view]))))
+          adaptive-post (:adaptive-post graph)
+          post-degraded? (and adaptive-post (> ninst (:max-instances adaptive-post)))
+          frame-passes (if post-degraded? (:passes adaptive-post) (:passes graph))
+          _ (some-> post-evidence
+                    (reset! {:tier (if post-degraded? :direct-aces :hdr-bloom)
+                             :instances ninst
+                             :threshold (:max-instances adaptive-post)}))
           draw-geom (fn [p pipe bnd]
                       (when (pos? ninst)
                         (w3/set-pipeline! p pipe) (w3/set-bind-group! p 0 bnd)
@@ -575,7 +599,7 @@
                             (w3/set-index-buffer! p gi "uint16")
                             (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
       ;; run the graph's passes in order (EDN-driven)
-      (doseq [{:keys [pipeline color depth clear clear-depth cascade]} (:passes graph)]
+      (doseq [{:keys [pipeline color depth clear clear-depth cascade]} frame-passes]
         (let [{:keys [pipe bind fullscreen]} (get pipelines pipeline)
               catts (if color
                       (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
@@ -595,6 +619,11 @@
             (draw-geom rp pipe bind))
           (w3/end-pass! rp)))
       (w3/submit! queue [(w3/finish! enc)])))))
+
+(defn post-evidence
+  "Last adaptive post-processing decision for profiling/Studio diagnostics."
+  [ctx]
+  (some-> ctx :post-evidence deref))
 
 (defn- draw-webgl! [{:keys [geos width height instance-cache] :as viewport} render-ir]
   (let [instances (:instances render-ir)
