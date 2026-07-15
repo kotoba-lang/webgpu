@@ -801,7 +801,7 @@
                        (-> e
                            (update :submits (fnil inc 0))
                            (assoc :submitted-instance-count ninst
-                                  :pass-count (count frame-passes)))))))))))
+                                  :pass-count (count frame-passes))))))))))
 
 (defn post-evidence
   "Last adaptive post-processing decision for profiling/Studio diagnostics."
