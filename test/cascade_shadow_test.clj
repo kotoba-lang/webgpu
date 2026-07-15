@@ -1,0 +1,26 @@
+(ns cascade-shadow-test
+  (:require [babashka.process :as p]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is run-tests]]
+            [kotoba.shaders :as shaders]))
+
+(defn- naga-valid? [name wgsl]
+  (let [path (str "/tmp/" name ".wgsl")]
+    (spit path (str wgsl "\n"))
+    (let [{:keys [exit err]} (p/sh "naga" path)]
+      (when-not (zero? exit)
+        (println name "→" (last (str/split-lines (str err)))))
+      (zero? exit))))
+
+(deftest cascaded-shaders-are-valid-wgsl
+  (if-not (zero? (:exit (p/sh "sh" "-c" "command -v naga")))
+    (println "  skip: naga not installed")
+    (do
+      (is (naga-valid? "cascaded_lit" (shaders/cascaded-lit-shader)))
+      (doseq [cascade (range 4)]
+        (is (naga-valid? (str "cascade_depth_" cascade)
+                         (shaders/cascaded-shadow-shader cascade)))))))
+
+(let [{:keys [fail error]} (run-tests 'cascade-shadow-test)]
+  (when (pos? (+ fail error))
+    (throw (ex-info "cascade shadow gate failed" {:fail fail :error error}))))

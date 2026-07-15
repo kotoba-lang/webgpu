@@ -5,7 +5,7 @@
 (def capabilities
   {:backend :webgpu
    :pbr #{:base-color :metallic :roughness :emissive}
-   :shadow {:directional true :max-cascades 1 :max-resolution 4096 :pcf-radius 1}
+   :shadow {:directional true :max-cascades 4 :max-resolution 4096 :pcf-radius 1}
    ;; ACES is currently fused into the lit fragment shader. Multi-pass effects
    ;; remain absent until the HDR intermediate frame graph lands.
    :post-process #{:tone-map}
@@ -130,12 +130,15 @@
         post-kinds (mapv :kind (get-in plan [:post-process :passes]))
         supported-post (vec (filter (:post-process capabilities) post-kinds))
         unsupported-post (vec (remove (:post-process capabilities) post-kinds))
-        graph' (if shadow-enabled?
-                 (assoc-in graph [:targets :shadow :size] [resolution resolution])
-                 graph)
+        effective-cascades (if shadow-enabled? (max 1 (min 4 requested-cascades)) 1)
+        graph' (-> graph
+                   (assoc-in [:targets :shadow :size] [resolution resolution 4])
+                   (update :passes
+                           (fn [passes]
+                             (vec (filter #(or (nil? (:cascade %))
+                                               (< (:cascade %) effective-cascades))
+                                          passes)))))
         degraded (cond-> []
-                   (> requested-cascades 1)
-                   (conj {:feature :shadow-cascades :requested requested-cascades :effective 1})
                    (seq unsupported-post)
                    (conj {:feature :post-process :unsupported unsupported-post :effective []})
                    (not shadow-enabled?)
@@ -144,7 +147,8 @@
                           :reason :lit-pipeline-currently-requires-shadow-binding}))]
     {:graph graph'
      :quality-plan plan
-     :effective {:shadow {:enabled? true :cascades 1 :resolution resolution}
+     :effective {:shadow {:enabled? true :cascades effective-cascades :resolution resolution
+                          :splits (vec (or (:splits requested-shadow) []))}
                  :post-process supported-post
                  :lod (:lod plan)}
      :degraded degraded
