@@ -32,7 +32,9 @@
    EDN) extend the same map without changing the contract — the executor reads what
    it understands and ignores the rest."
   (:require [kami.webgpu.geometry :as geom]
-            [kotoba.render.building :as building]))
+            [kotoba.render.building :as building]
+            [kotoba.render.terrain :as terrain]
+            [kotoba.render.terrain-biome :as terrain-biome]))
 
 (defn material
   "A PBR material — pure data. metallic 0=dielectric…1=metal; roughness 0=mirror…1=matte;
@@ -115,6 +117,38 @@
      :uvs (mapv vec (partition 2 uvs))
      :indices indices}))
 
+(defn- registered-mesh [{:keys [mesh]}]
+  (let [{:keys [positions normals biome-weights indices]} mesh
+        vertex-count (count positions)]
+    (when-not (and (map? mesh)
+                   (seq positions)
+                   (seq indices)
+                   (= vertex-count (count normals))
+                   (or (nil? biome-weights) (= vertex-count (count biome-weights)))
+                   (every? #(= 3 (count %)) positions)
+                   (every? #(= 3 (count %)) normals)
+                   (zero? (mod (count indices) 3))
+                   (every? #(< -1 % vertex-count) indices))
+      (throw (ex-info "invalid registered geometry mesh"
+                      {:vertex-count vertex-count :normal-count (count normals)
+                       :index-count (count indices)})))
+    (select-keys mesh [:positions :normals :uvs :biome-weights :indices])))
+
+(defn- terrain-geometry [{:keys [detail] :as spec}]
+  (let [[positions normals uvs indices]
+        (terrain/terrain-mesh
+         (select-keys spec [:patch :size :base-segments :amplitude :seed :skirt-depth])
+         (or detail :high))
+        positions (mapv vec (partition 3 positions))
+        normals (mapv vec (partition 3 normals))]
+    {:positions positions
+     :normals normals
+     :uvs (mapv vec (partition 2 uvs))
+     :biome-weights (terrain-biome/mesh-weights
+                     (or (:biome spec) terrain-biome/default-biome)
+                     [(vec (mapcat identity positions)) (vec (mapcat identity normals)) uvs indices])
+     :indices indices}))
+
 (defn mesh-from-spec
   "Bake one geometry spec → a mesh {:positions :normals :indices}. Pure + cross-platform
    (a native executor reimplements this dispatch over the same data). Unknown :type → unit box."
@@ -125,6 +159,8 @@
     :cylinder (geom/cylinder (or r 0.5) (or h 1) (or sectors 20))
     :plane    (geom/plane (or w 10) (or d 10))
     :building (building-geometry spec)
+    :mesh     (registered-mesh spec)
+    :terrain  (terrain-geometry spec)
     (geom/box 1 1 1)))
 
 (defn instance
