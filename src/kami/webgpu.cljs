@@ -368,6 +368,7 @@
                      :material-texture-sets [<material texture set> ...]
                      :environment <:kotoba.render/pbr-environment-v1>
                      :adapter-options <GPURequestAdapterOptions JS object>
+                     :prefer-packed-hdr? <boolean, defaults true>
                      :geometry <{:geo-kw {:type … params}} EDN>} —
    default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
@@ -378,7 +379,8 @@
          (.then (fn [adapter]
                   (if-not adapter
                     (js/Promise.reject (js/Error. "No WebGPU adapter available"))
-                    (let [packed-hdr? (.has (.-features adapter) HDR-RENDERABLE-FEATURE)
+                    (let [packed-hdr? (and (not= false (:prefer-packed-hdr? opts))
+                                           (.has (.-features adapter) HDR-RENDERABLE-FEATURE))
                           descriptor (when packed-hdr?
                                        #js {:requiredFeatures #js [HDR-RENDERABLE-FEATURE]})]
                       (-> (w3/request-device! adapter descriptor)
