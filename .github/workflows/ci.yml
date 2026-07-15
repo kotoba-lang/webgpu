@@ -21,7 +21,7 @@ jobs:
         with: { repository: kotoba-lang/expr, path: expr }
       - name: Checkout bb.edn sibling graph
         run: |
-          for repo in wgsl sprite-gpu sprite2d sky shaders render render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
+          for repo in org-w3-webgpu wgsl sprite-gpu sprite2d sky shaders render render-shaders scene2d gpu webgl dance physics fsm netsync pipelines level host playwright cartpole-math; do
             git clone --depth 1 "https://github.com/kotoba-lang/${repo}.git" "${repo}"
           done
         working-directory: .
@@ -29,7 +29,21 @@ jobs:
         with: { distribution: temurin, java-version: '21' }
       - name: Install babashka
         uses: DeLaGuardo/setup-clojure@13.0
-        with: { bb: 'latest' }
+        with: { bb: 'latest', cli: 'latest' }
+      - name: Read every ClojureScript executor source
+        working-directory: .
+        run: |
+          find webgpu/src -name '*.cljs' -print0 | while IFS= read -r -d '' file; do
+            CLJS_FILE="$file" clojure -M -e '
+              (let [file (System/getenv "CLJS_FILE")]
+                (binding [*default-data-reader-fn* (fn [_ value] value)]
+                  (with-open [reader (java.io.PushbackReader.
+                                      (clojure.java.io/reader file))]
+                    (loop []
+                      (let [form (read {:eof ::eof :read-cond :allow
+                                        :features #{:cljs}} reader)]
+                        (when-not (= ::eof form) (recur)))))))'
+          done
       - name: bb test — all gates (domains/geometry/render-ir/wgsl/dsl/shader/gpu/sprite-gpu)
         run: bb test
       - name: GLSL backend — EDN → WGSL → GLSL ES 3.00 (web fallback shaders)
