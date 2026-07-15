@@ -31,8 +31,9 @@ jobs:
         uses: DeLaGuardo/setup-clojure@13.0
         with: { bb: 'latest', cli: 'latest' }
       - name: Read every ClojureScript executor source
+        working-directory: .
         run: |
-          find src -name '*.cljs' -print0 | while IFS= read -r -d '' file; do
+          find webgpu/src -name '*.cljs' -print0 | while IFS= read -r -d '' file; do
             CLJS_FILE="$file" clojure -M -e '
               (let [file (System/getenv "CLJS_FILE")]
                 (binding [*default-data-reader-fn* (fn [_ value] value)]
