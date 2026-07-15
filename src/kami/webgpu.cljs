@@ -137,8 +137,11 @@
                :depth2 (shaders/cascaded-shadow-shader 2)
                :depth3 (shaders/cascaded-shadow-shader 3)}
    :targets   {:shadow {:depth "depth32float" :size [2048 2048 4] :layers 4}
-               :hdr {:color HDR-FORMAT :scale 1.0}
-               :bloom {:color HDR-FORMAT :scale 0.5}}
+               ;; Internal dynamic-resolution tier: shade the 3D scene at half
+               ;; linear resolution, extract bloom at quarter resolution, then
+               ;; composite/ACES into the full-resolution swapchain.
+               :hdr {:color HDR-FORMAT :scale 0.5}
+               :bloom {:color HDR-FORMAT :scale 0.25}}
    :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}
                :linear {:magFilter "linear" :minFilter "linear"}}
    :pipelines {:shadow0 {:shader :depth0 :cull "back"
@@ -309,10 +312,17 @@
                                                                                   :arrayLayerCount 1})
                                                          (range layers)))]
                                  (assoc m k {:tex tex :view view :layer-views layer-views
-                                             :layers layers :format f})))
+                                             :width tw :height th :layers layers :format f})))
                              {} (:targets graph))
-                   sdepth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
-                   targets (assoc targets :screen-depth {:view (w3/create-view sdepth) :format "depth24plus"})
+                   ;; The depth attachment paired with the main HDR pass must
+                   ;; exactly match its scaled color attachment dimensions.
+                   main-target (get targets :hdr)
+                   depth-w (or (:width main-target) w)
+                   depth-h (or (:height main-target) h)
+                   sdepth (w3/create-texture! device #js {:size #js [depth-w depth-h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
+                   targets (assoc targets :screen-depth {:view (w3/create-view sdepth)
+                                                         :width depth-w :height depth-h
+                                                         :format "depth24plus"})
                    ;; pipelines + bind groups, from EDN
                    pipelines (reduce-kv
                                (fn [m k pd]
