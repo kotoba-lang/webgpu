@@ -359,13 +359,14 @@
                                          <:kotoba.render/texture-rgba8-v1>}
                      :material-texture-sets [<material texture set> ...]
                      :environment <:kotoba.render/pbr-environment-v1>
+                     :adapter-options <GPURequestAdapterOptions JS object>
                      :geometry <{:geo-kw {:type … params}} EDN>} —
    default to default-graph / ir/default-geometry (a {:geometry …} override is merged over it)."
   ([canvas] (init! canvas nil))
   ([canvas opts]
    (if-not (w3/supported?)
      (init-webgl-fallback! canvas opts)
-     (-> (w3/request-adapter!)
+     (-> (w3/request-adapter! (:adapter-options opts))
          (.then (fn [adapter]
                   (if adapter (w3/request-device! adapter)
                     (js/Promise.reject (js/Error. "No WebGPU adapter available")))))
@@ -461,6 +462,7 @@
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
+                :adapter-options (:adapter-options opts)
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
@@ -769,6 +771,8 @@
    this to prevent a visually plausible WebGL fallback from claiming WebGPU."
   [ctx]
   {:backend (:backend ctx)
+   :force-fallback-adapter (boolean (some-> ctx :adapter-options
+                                            (aget "forceFallbackAdapter")))
    :webgpu-init-error (:webgpu-init-error ctx)})
 
 (defn environment-evidence
