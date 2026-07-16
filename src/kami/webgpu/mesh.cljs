@@ -592,3 +592,33 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
         (draw! mesh-context pass buffers vp color [] joint-matrices)
         (w3/end-pass! pass)
         (w3/submit! queue [(w3/finish! encoder)]))))))
+
+(defn encode-skinned-overlay!
+  "Encode skinned meshes into the main renderer's graph-local world target.
+   Called by `kami.webgpu/set-world-overlay!` before post-processing, therefore
+   color, depth, camera, and resolution are exactly shared with world geometry."
+  [gpu-ctx mesh-context encoder {:keys [color-view depth-view]} draws
+   {:keys [eye target fov near far] :or {fov 60.0 near 0.5 far 4000.0}}]
+  (when (seq draws)
+    (when-not (and (= :webgpu (:backend gpu-ctx))
+                   (identical? (:device gpu-ctx) (:device mesh-context)))
+      (throw (js/Error. "skinned overlay requires the main WebGPU device")))
+    (let [device (:device gpu-ctx)
+          projection (m4-mul
+                      (perspective (* fov (/ js/Math.PI 180.0))
+                                   (/ (:w gpu-ctx) (:h gpu-ctx)) near far)
+                      (look-at eye target [0 1 0]))
+          pass (w3/begin-render-pass!
+                encoder
+                #js {:colorAttachments
+                     #js [#js {:view color-view
+                               :loadOp "load" :storeOp "store"}]
+                     :depthStencilAttachment
+                     #js {:view depth-view
+                          :depthLoadOp "load" :depthStoreOp "store"}})]
+      (doseq [{:keys [buffers transform color joint-matrices morph-weights material]} draws]
+        (draw! mesh-context pass buffers
+               (m4-mul projection (model-matrix (or transform {})))
+               color (or morph-weights [])
+               joint-matrices material))
+      (w3/end-pass! pass))))
