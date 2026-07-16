@@ -20,13 +20,14 @@
     (is (str/includes? source ":dimension \"2d-array\""))
     (is (str/includes? source ":origin #js [0 0 layer]"))
     (is (str/includes? source "(double (inc texture-layer))"))
-    (is (str/includes? source "(def ^:private INST-FLOATS 28)"))
+    (is (str/includes? source "(def ^:private INST-FLOATS 32)"))
     (is (str/includes? source "(def ^:private INST-STRIDE (* 4 INST-FLOATS))"))
     (is (str/includes? source "[w h d] (ir/instance-size size)"))
     (is (str/includes? source "(aset idata (+ base 8) (* s d))"))
     (is (str/includes? source "(aset idata (+ base 10) (* c d))"))
     (is (str/includes? source "(model-mat pos (or yaw 0) w h d)"))
     (is (str/includes? source "(vattr \"float32x4\" 96 10)"))
+    (is (str/includes? source "(vattr \"float32x4\" 112 13)"))
     (is (str/includes? source "(vattr \"float32x3\" 48 11)"))
     (is (str/includes? source "(vattr \"float32x3\" 60 12)"))
     (is (str/includes? source "biome-weights"))
@@ -39,6 +40,14 @@
     (is (str/includes? source ":prefiltered-specular"))
     (is (str/includes? source ":brdf-lut"))
     (is (str/includes? source ":maxAnisotropy 8"))))
+
+(deftest foliage-host-wires-cutout-wind-and-depth-fragments
+  (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
+    (is (str/includes? source "render-foliage/gpu-instance"))
+    (is (str/includes? source "cascaded-foliage-shadow-shader"))
+    (is (str/includes? source ":masked-instance-count"))
+    (is (str/includes? source "(js/Float32Array. 116)"))
+    (is (str/includes? source "#js []"))))
 
 (let [{:keys [fail error]} (run-tests 'material-texture-test)]
   (when (pos? (+ fail error))
