@@ -153,6 +153,26 @@
     graph
     (walk/postwalk-replace {HDR-FORMAT "rgba16float"} graph)))
 
+(defn adaptive-ssao-graph
+  "Apply a resolved, data-owned SSAO tier before GPU resources are allocated.
+   Disabled tiers use the direct atmosphere/main path, so no AO texture or
+   fullscreen AO pass is sampled. Enabled tiers retain contact grounding with
+   an explicit sample and internal-resolution budget."
+  [graph {:keys [enabled? sample-count resolution-scale] :as tier}]
+  (let [enabled? (not= false enabled?)
+        samples (-> (or sample-count 12) long (max 1) (min 12))
+        scale (-> (or resolution-scale 0.5) double (max 0.125) (min 1.0))
+        direct-passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
+                       {:pipeline :atmosphere-direct :color :screen :clear [0 0 0]}
+                       {:pipeline :main-direct :color :screen :depth :screen-depth :load? true}]]
+    (cond-> (assoc graph :ssao-tier (assoc tier :enabled? enabled?
+                                                :sample-count samples
+                                                :resolution-scale scale))
+      enabled? (assoc-in [:targets :ssao :scale] scale)
+      enabled? (assoc-in [:ssao :sample-count] samples)
+      (not enabled?) (assoc :passes direct-passes
+                            :adaptive-post {:max-instances 0 :passes direct-passes}))))
+
 (def default-graph
   "The frame, described as data. :passes is an ordered array — the shadow pass renders
    depth into the :shadow target, then the main pass draws to the screen sampling it.
@@ -451,8 +471,9 @@
                                   (reset! device-loss
                                           {:reason (str (.-reason info))
                                            :message (str (.-message info))}))))
-                   graph-base (resolve-hdr-graph (or (:graph opts) default-graph)
-                                                 packed-hdr?)
+                   graph-base (-> (or (:graph opts) default-graph)
+                                  (adaptive-ssao-graph (:ssao-tier opts))
+                                  (resolve-hdr-graph packed-hdr?))
                    quality-resolution (when-let [plan (:quality-plan opts)]
                                         (quality/resolve-plan graph-base plan))
                    graph (or (:graph quality-resolution) graph-base)
@@ -485,7 +506,7 @@
                    inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
                    gbuf (w3/create-buffer! device #js {:size 464 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    atmosphere-buffer (w3/create-buffer! device #js {:size 128 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
-                   ssao-buffer (w3/create-buffer! device #js {:size 32 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   ssao-buffer (w3/create-buffer! device #js {:size 48 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -859,10 +880,13 @@
     (w3/write-buffer! queue ssao-buffer 0
                       (js/Float32Array.
                        (clj->js [(:radius-px ssao) (:intensity ssao) (:bias ssao) (:power ssao)
-                                 (:near ssao) (:far ssao) (:fade-start ssao) (:fade-end ssao)])))
+                                 (:near ssao) (:far ssao) (:fade-start ssao) (:fade-end ssao)
+                                 (:sample-count ssao) 0.0 0.0 0.0])))
     (some-> ssao-evidence
             (reset! (assoc ssao :schema :kotoba.webgpu/ssao-evidence-v1
-                                :sample-count 12 :deterministic? true
+                                :sample-count (:sample-count ssao) :deterministic? true
+                                :enabled? (get-in graph [:ssao-tier :enabled?] true)
+                                :resolution-scale (get-in graph [:ssao-tier :resolution-scale] 0.5)
                                 :resolution [(get-in targets [:ssao :width])
                                              (get-in targets [:ssao :height])])))
     (some-> atmosphere-evidence

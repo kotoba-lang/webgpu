@@ -11,7 +11,10 @@
   (is (str/includes? source "(w3/texture-usage :texture-binding)"))
   (is (= 2 (count (re-seq #"\{:pipeline :ssao :color :ssao" source)))
       "cinematic and saturation tiers both retain contact AO")
-  (is (str/includes? source ":sample-count 12 :deterministic? true"))
+  (is (str/includes? source ":sample-count (:sample-count ssao) :deterministic? true"))
+  (is (str/includes? source "defn adaptive-ssao-graph"))
+  (is (str/includes? source ":resolution-scale scale"))
+  (is (str/includes? source ":size 48"))
   (is (str/includes? source ":kotoba.webgpu/ssao-evidence-v1")))
 
 (let [{:keys [fail error]} (run-tests 'ssao-graph-test)]
