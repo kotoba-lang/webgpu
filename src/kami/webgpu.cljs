@@ -504,6 +504,7 @@
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
+                :world-overlay (atom nil)
                 :gpu-errors gpu-errors
                 :device-loss device-loss
                 :frame-evidence frame-evidence
@@ -659,7 +660,7 @@
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
   [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
-           frame-evidence]} ir]
+           frame-evidence world-overlay]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
                   (swap! (fn [e]
@@ -815,7 +816,14 @@
                   (w3/set-bind-group! rp 0 bind)
                   (w3/draw! rp 3))
               (draw-geom rp pipe bind)))
-          (w3/end-pass! rp)))
+          (w3/end-pass! rp)
+          ;; Arbitrary/skinned meshes join the graph after the world geometry
+          ;; pass and before post-processing, on the exact same HDR/depth views.
+          (when (and (not fullscreen) color depth (= depth :screen-depth))
+            (when-let [encode! (some-> world-overlay deref)]
+              (encode! enc {:color-view (vw color nil)
+                            :depth-view (vw depth cascade)
+                            :color-format (get-in targets [color :format])})))))
       (w3/submit! queue [(w3/finish! enc)])
       (some-> frame-evidence
               (swap! (fn [e]
@@ -823,6 +831,14 @@
                            (update :submits (fnil inc 0))
                            (assoc :submitted-instance-count ninst
                                   :pass-count (count frame-passes))))))))))
+
+(defn set-world-overlay!
+  "Install the current frame's graph-local overlay encoder. The callback runs
+   between world geometry and post-processing with `(encoder attachments)`;
+   pass nil to clear it."
+  [ctx encode!]
+  (when-let [slot (:world-overlay ctx)] (reset! slot encode!))
+  ctx)
 
 (defn post-evidence
   "Last adaptive post-processing decision for profiling/Studio diagnostics."
