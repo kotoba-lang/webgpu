@@ -304,6 +304,14 @@
                                               #js [])}))
     (w3/create-render-pipeline! device desc)))
 
+(defn render-bundle-descriptor
+  "Return the attachment compatibility descriptor for a graph pipeline.
+   Public because Studio/perf gates can prove that cached bundles target the
+   same formats as their render passes without inspecting GPU objects."
+  [fmt {:keys [color depth]}]
+  {:colorFormats (if color [(if (= color :screen) fmt color)] [])
+   :depthStencilFormat (some-> depth :format)})
+
 (defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
   [device pipe gbuf atmosphere-buffer ssao-buffer targets samplers binds]
   (w3/create-bind-group! device
@@ -539,6 +547,7 @@
                                  (let [pipe (build-pipeline device fmt (:shaders graph) pd)]
                                    (assoc m k {:pipe pipe
                                                :fullscreen (:fullscreen pd)
+                                               :bundle-descriptor (render-bundle-descriptor fmt pd)
                                                :bind (build-bind device pipe gbuf atmosphere-buffer ssao-buffer targets samplers (:binds pd))})))
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
@@ -575,6 +584,12 @@
                 :atmosphere-evidence (atom nil)
                 :foliage-evidence (atom nil)
                 :streaming-evidence (atom nil)
+                ;; Geometry draw commands are invariant across frames: only
+                ;; uniform/instance-buffer CONTENT changes. Cache one
+                ;; GPURenderBundle per compatible graph pipeline and replay it.
+                ;; A capacity grow replaces the instance GPUBuffer, so draw!
+                ;; clears this cache before recording against the new handle.
+                :render-bundle-cache (atom {})
                 :lod-state (atom {}) :lod-evidence (atom nil)
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
                 ;; SAME value (by reference) across draw! calls in normal use (compose
@@ -716,7 +731,8 @@
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
   [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf atmosphere-buffer ssao-buffer idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
-           atmosphere-evidence ssao-evidence frame-evidence foliage-evidence world-overlay]} ir]
+           atmosphere-evidence ssao-evidence frame-evidence foliage-evidence world-overlay
+           render-bundle-cache]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
                   (swap! (fn [e]
@@ -856,6 +872,7 @@
     ;; re-upload on a real cache miss OR a just-grown (contents-undefined)
     ;; buffer. See the :instance-cache note on init! and the draw! docstring.
     (let [{:keys [buf grew?]} (ensure-inst-buffer! inst-buffer device (count insts))]
+      (when (and grew? render-bundle-cache) (reset! render-bundle-cache {}))
       (when (or (not cache-hit?) grew?) (w3/write-buffer! queue buf 0 idata))
     (let [enc (w3/create-command-encoder! device)
           ninst (count insts)
@@ -881,10 +898,24 @@
                           (let [{gv :vbuf gi :ibuf gn :idx-count} (get geos gk (:box geos))]
                             (w3/set-vertex-buffer! p 0 gv)
                             (w3/set-index-buffer! p gi "uint16")
-                            (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
+                            (w3/draw-indexed! p gn gcount 0 0 gfirst)))))
+          geometry-bundle
+          (fn [pipeline-key pipe bnd bundle-descriptor]
+            (when (and render-bundle-cache (pos? ninst))
+              (let [signature geo-groups
+                    cached (get @render-bundle-cache pipeline-key)]
+                (if (= signature (:signature cached))
+                  (:bundle cached)
+                  (let [encoder (w3/create-render-bundle-encoder!
+                                 device (clj->js bundle-descriptor))]
+                    (draw-geom encoder pipe bnd)
+                    (let [bundle (w3/finish-render-bundle! encoder)]
+                      (swap! render-bundle-cache assoc pipeline-key
+                             {:signature signature :bundle bundle})
+                      bundle))))))]
       ;; run the graph's passes in order (EDN-driven)
       (doseq [{:keys [pipeline color depth clear clear-depth cascade draw load?]} frame-passes]
-        (let [{:keys [pipe bind fullscreen]} (get pipelines pipeline)
+        (let [{:keys [pipe bind fullscreen bundle-descriptor]} (get pipelines pipeline)
               catts (if color
                       (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
                         #js [#js {:view (vw color nil) :loadOp (if load? "load" "clear") :storeOp "store"
@@ -901,7 +932,9 @@
               (do (w3/set-pipeline! rp pipe)
                   (w3/set-bind-group! rp 0 bind)
                   (w3/draw! rp 3))
-              (draw-geom rp pipe bind)))
+              (if-let [bundle (geometry-bundle pipeline pipe bind bundle-descriptor)]
+                (w3/execute-bundles! rp [bundle])
+                (draw-geom rp pipe bind))))
           (w3/end-pass! rp)
           ;; Arbitrary/skinned meshes join the graph after the world geometry
           ;; pass and before post-processing, on the exact same HDR/depth views.
@@ -916,7 +949,8 @@
                        (-> e
                            (update :submits (fnil inc 0))
                            (assoc :submitted-instance-count ninst
-                                  :pass-count (count frame-passes))))))))))
+                                  :pass-count (count frame-passes)
+                                  :render-bundle-count (count (or (some-> render-bundle-cache deref) {})))))))))))
 
 (defn set-world-overlay!
   "Install the current frame's graph-local overlay encoder. The callback runs
