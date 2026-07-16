@@ -17,6 +17,7 @@
             [kami.webgpu.quality :as quality]
             [kotoba.webgl :as webgl]
             [kotoba.render.environment :as render-environment]
+            [kotoba.render.foliage :as render-foliage]
             [kotoba.render.instance :as render-instance]
             [kotoba.render.mesh :as render-mesh]
             [kotoba.render.texture :as render-texture]
@@ -130,7 +131,7 @@
 
 ;; depth-only shadow pass: render instances from the sun's POV into the shadow map.
 ;; the depth-only shadow pass — also generated from data (kami.shaders/shadow-shader).
-(def SHADOW-WGSL (shaders/cascaded-shadow-shader 0))
+(def SHADOW-WGSL (shaders/cascaded-foliage-shadow-shader 0))
 
 ;; --- the render graph, as EDN data -------------------------------------------
 
@@ -155,10 +156,10 @@
   {:shaders   {:lit SHADER :lit-direct (shaders/cascaded-textured-lit-shader)
                :bloom (shaders/bloom-shader)
                :composite (shaders/hdr-composite-shader)
-               :depth0 (shaders/cascaded-shadow-shader 0)
-               :depth1 (shaders/cascaded-shadow-shader 1)
-               :depth2 (shaders/cascaded-shadow-shader 2)
-               :depth3 (shaders/cascaded-shadow-shader 3)}
+               :depth0 (shaders/cascaded-foliage-shadow-shader 0)
+               :depth1 (shaders/cascaded-foliage-shadow-shader 1)
+               :depth2 (shaders/cascaded-foliage-shadow-shader 2)
+               :depth3 (shaders/cascaded-foliage-shadow-shader 3)}
    :targets   {:shadow {:depth "depth32float" :size [2048 2048 4] :layers 4}
                ;; Internal dynamic-resolution tier: shade the 3D scene at half
                ;; linear resolution, extract bloom at quarter resolution, then
@@ -172,16 +173,20 @@
                           :addressModeU "repeat" :addressModeV "repeat"}}
    :pipelines {:shadow0 {:shader :depth0 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
-                         :binds [:uniform]}
+                         :fragment true
+                         :binds [:uniform {:texture :albedo} {:sampler :material}]}
                :shadow1 {:shader :depth1 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
-                         :binds [:uniform]}
+                         :fragment true
+                         :binds [:uniform {:texture :albedo} {:sampler :material}]}
                :shadow2 {:shader :depth2 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
-                         :binds [:uniform]}
+                         :fragment true
+                         :binds [:uniform {:texture :albedo} {:sampler :material}]}
                :shadow3 {:shader :depth3 :cull "back"
                          :depth {:format "depth32float" :write true :compare "less"}
-                         :binds [:uniform]}
+                         :fragment true
+                         :binds [:uniform {:texture :albedo} {:sampler :material}]}
                :main   {:shader :lit :cull "back" :color HDR-FORMAT
                         :depth {:format "depth24plus" :write true :compare "less-equal"}
                         :binds [:uniform {:texture :shadow} {:sampler :comparison}
@@ -222,7 +227,7 @@
 ;; the same value so typical scenes (<16384 instances) still pay zero extra
 ;; buffer churn versus before this fix.
 (def ^:private INITIAL-INST-CAPACITY 16384)
-(def ^:private INST-FLOATS 28)
+(def ^:private INST-FLOATS 32)
 (def ^:private INST-STRIDE (* 4 INST-FLOATS))
 
 (defn- mk-inst-buffer [device capacity]
@@ -253,12 +258,12 @@
             :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)
                              (vattr "float32x2" 24 8) (vattr "float32x4" 32 9)
                              (vattr "float32x3" 48 11) (vattr "float32x3" 60 12)]}
-       #js {:arrayStride 112 :stepMode "instance"
+       #js {:arrayStride 128 :stepMode "instance"
             :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3) (vattr "float32x4" 32 4)
                              (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)
-                             (vattr "float32x4" 96 10)]}])
+                             (vattr "float32x4" 96 10) (vattr "float32x4" 112 13)]}])
 
-(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen]}]
+(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen fragment]}]
   (let [mod (w3/create-shader-module! device #js {:code (get shaders shader)})
         desc #js {:layout "auto"
                   :vertex #js {:module mod :entryPoint "vs"
@@ -268,9 +273,11 @@
       (set! (.-depthStencil desc)
             #js {:format (:format depth) :depthWriteEnabled (boolean (:write depth))
                  :depthCompare (:compare depth)}))
-    (when color   ;; no :color → depth-only pipeline (shadow pass)
+    (when (or color fragment) ;; alpha-masked depth pass needs a fragment discard stage
       (set! (.-fragment desc) #js {:module mod :entryPoint "fs"
-                                   :targets #js [#js {:format (if (= color :screen) fmt color)}]}))
+                                   :targets (if color
+                                              #js [#js {:format (if (= color :screen) fmt color)}]
+                                              #js [])}))
     (w3/create-render-pipeline! device desc)))
 
 (defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
@@ -440,7 +447,7 @@
                                    {} baked-geometries)
                    box (:box geos)
                    inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
-                   gbuf (w3/create-buffer! device #js {:size 448 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   gbuf (w3/create-buffer! device #js {:size 464 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -530,6 +537,7 @@
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
                 :post-evidence (atom nil)
+                :foliage-evidence (atom nil)
                 :lod-state (atom {}) :lod-evidence (atom nil)
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
                 ;; SAME value (by reference) across draw! calls in normal use (compose
@@ -549,7 +557,8 @@
   "Write one instance directly into the shared Float32Array. This is the
   closed-form T*Ry*S matrix used by model-mat, avoiding three temporary
   matrices, two matrix multiplies, and two clj->js arrays per instance."
-  [idata i {:keys [pos color size yaw metallic roughness emissive textured? texture-layer uv-transform]}]
+  [idata i {:keys [pos color size yaw metallic roughness emissive textured? texture-layer uv-transform]
+            :as instance}]
   (let [[x y z] pos
         [w h d] (ir/instance-size size)
         yaw (or yaw 0)
@@ -590,7 +599,17 @@
     (aset idata (+ base 24) uv-scale-u)
     (aset idata (+ base 25) uv-scale-v)
     (aset idata (+ base 26) uv-offset-u)
-    (aset idata (+ base 27) uv-offset-v)))
+    (aset idata (+ base 27) uv-offset-v)
+    (let [[cutoff strength phase frequency]
+          (render-foliage/gpu-instance
+           (if (some #(contains? instance %) [:alpha-mode :alpha-cutoff :wind-strength
+                                              :wind-phase :wind-frequency])
+             instance
+             {:alpha-mode :opaque}))]
+      (aset idata (+ base 28) cutoff)
+      (aset idata (+ base 29) strength)
+      (aset idata (+ base 30) phase)
+      (aset idata (+ base 31) frequency))))
 
 (defn- compute-instance-data
   "Pure: bucket instances by geometry kind (so each kind's instances are
@@ -660,7 +679,7 @@
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
   [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
-           frame-evidence world-overlay]} ir]
+           frame-evidence foliage-evidence world-overlay]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
                   (swap! (fn [e]
@@ -749,7 +768,12 @@
         ;; (omitting it reproduces the original baked-in constants exactly — parity, no change).
         lt (ir/lighting (:lighting g))
         amb (arr3 lt :ambient [0.20 0.22 0.26])
-        gf (js/Float32Array. 112)]
+        wind (merge {:direction [1.0 0.25] :time 0.0 :speed 1.0} (:wind g))
+        [wind-x wind-z] (:direction wind)
+        wind-length (js/Math.sqrt (+ (* wind-x wind-x) (* wind-z wind-z)))
+        [wind-x wind-z] (if (> wind-length 1.0e-6)
+                          [(/ wind-x wind-length) (/ wind-z wind-length)] [1.0 0.0])
+        gf (js/Float32Array. 116)]
     (.set gf vp 0)
     (.set gf (clj->js [(sun-dir 0) (sun-dir 1) (sun-dir 2) (nth eye 0)]) 16)
     (.set gf (clj->js [(sun 0) (sun 1) (sun 2) (nth eye 1)]) 20)
@@ -765,6 +789,12 @@
     ;; light_d = [gamma, shadow-bias-slope, shadow-bias-min, shadow-texel]
     (.set gf (clj->js [(:gamma lt) (:shadow-bias-slope lt) (:shadow-bias-min lt)
                        (/ 1.0 (or (first (get-in graph [:targets :shadow :size])) 2048.0))]) 108)
+    (.set gf (clj->js [wind-x wind-z (:time wind) (:speed wind)]) 112)
+    (some-> foliage-evidence
+            (reset! {:schema :kotoba.webgpu/foliage-evidence-v1
+                     :masked-instance-count (count (filter #(= :mask (:alpha-mode %)) insts))
+                     :wind-instance-count (count (filter #(pos? (or (:wind-strength %) 0.0)) insts))
+                     :direction [wind-x wind-z] :time (:time wind) :speed (:speed wind)}))
     (w3/write-buffer! queue gbuf 0 gf)
     ;; grow the GPU instance buffer first if this frame's instance count
     ;; exceeds its current capacity (ADR-2607100100 M6) — then only
@@ -849,6 +879,11 @@
   "Uploaded PBR texture formats and dimensions (never includes pixel data)."
   [ctx]
   (:material-textures ctx))
+
+(defn foliage-evidence
+  "Last submitted alpha-mask/wind summary; excludes texture pixels."
+  [ctx]
+  (some-> ctx :foliage-evidence deref))
 
 (defn backend-evidence
   "Renderer backend and any WebGPU initialization failure. Capture gates use
