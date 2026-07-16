@@ -6,8 +6,8 @@
 
 (deftest hdr-and-adaptive-graphs-preserve-atmosphere
   (is (str/includes? source ":atmosphere (shaders/atmosphere-cloud-shader)"))
-  (is (str/includes? source "{:pipeline :atmosphere :color :hdr"))
-  (is (str/includes? source "{:pipeline :atmosphere-direct :color :screen"))
+  (is (= 2 (count (re-seq #"\{:pipeline :atmosphere :color :hdr" source)))
+      "cinematic and adaptive SSAO paths both retain the HDR atmosphere")
   (is (str/includes? source ":loadOp (if load? \"load\" \"clear\")"))
   (is (str/includes? source ":uniform-floats 32")))
 
