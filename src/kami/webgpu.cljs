@@ -144,6 +144,10 @@
 
 (def ^:private HDR-RENDERABLE-FEATURE "rg11b10ufloat-renderable")
 
+(def ^:private DEFAULT-SSAO
+  {:radius-px 8.0 :intensity 1.15 :bias 0.035 :power 1.2
+   :near 0.5 :far 4000.0 :fade-start 180.0 :fade-end 620.0})
+
 (defn- resolve-hdr-graph [graph packed-hdr?]
   (if packed-hdr?
     graph
@@ -156,8 +160,10 @@
    to init!). Each pipeline's :binds wires its group-0 resources by name."
   {:shaders   {:lit SHADER :lit-direct (shaders/cascaded-textured-lit-shader)
                :atmosphere (shaders/atmosphere-cloud-shader)
+               :ssao (shaders/ssao-shader)
                :bloom (shaders/bloom-shader)
                :composite (shaders/hdr-composite-shader)
+               :ao-composite (shaders/hdr-ao-composite-shader)
                :depth0 (shaders/cascaded-foliage-shadow-shader 0)
                :depth1 (shaders/cascaded-foliage-shadow-shader 1)
                :depth2 (shaders/cascaded-foliage-shadow-shader 2)
@@ -167,6 +173,7 @@
                ;; linear resolution, extract bloom at quarter resolution, then
                ;; composite/ACES into the full-resolution swapchain.
                :hdr {:color HDR-FORMAT :scale 0.5}
+               :ssao {:color "r8unorm" :scale 0.5}
                :bloom {:color HDR-FORMAT :scale 0.25}}
    :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}
                :linear {:magFilter "linear" :minFilter "linear"}
@@ -209,23 +216,32 @@
                                    :binds [:atmosphere-uniform]}
                :bloom {:shader :bloom :fullscreen true :color HDR-FORMAT
                        :binds [{:texture :hdr} {:sampler :linear}]}
+               :ssao {:shader :ssao :fullscreen true :color "r8unorm"
+                      :binds [{:texture :screen-depth} :ssao-uniform]}
                :composite {:shader :composite :fullscreen true :color :screen
-                           :binds [{:texture :hdr} {:texture :bloom} {:sampler :linear}]}}
+                           :binds [{:texture :hdr} {:texture :bloom}
+                                   {:texture :ssao} {:sampler :linear}]}
+               :ao-composite {:shader :ao-composite :fullscreen true :color :screen
+                              :binds [{:texture :hdr} {:texture :ssao} {:sampler :linear}]}}
    :passes    [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
                {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
                {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
                {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
                {:pipeline :atmosphere :color :hdr :clear [0 0 0]}
                {:pipeline :main :color :hdr :depth :screen-depth :load? true}
+               {:pipeline :ssao :color :ssao :clear [1 1 1]}
                {:pipeline :bloom :color :bloom :clear [0 0 0]}
                {:pipeline :composite :color :screen :clear [0 0 0]}]
    ;; Keep cinematic post-processing for ordinary scenes. At saturation,
-   ;; preserve PBR + cascaded shadows + ACES in one direct pass and shed only
-   ;; bloom/intermediate-target work that would otherwise back-pressure the GPU.
+   ;; preserve PBR + atmosphere + contact AO + ACES, while shedding bloom and
+   ;; three distant shadow cascades that would otherwise back-pressure the GPU.
    :adaptive-post {:max-instances 256
                    :passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
-                            {:pipeline :atmosphere-direct :color :screen :clear [0 0 0]}
-                            {:pipeline :main-direct :color :screen :depth :direct-depth :load? true}]}})
+                            {:pipeline :atmosphere :color :hdr :clear [0 0 0]}
+                            {:pipeline :main :color :hdr :depth :screen-depth :load? true}
+                            {:pipeline :ssao :color :ssao :clear [1 1 1]}
+                            {:pipeline :ao-composite :color :screen :clear [0 0 0]}]}
+   :ssao DEFAULT-SSAO})
 
 ;; ADR-2607100100 M6: this used to be a hard cap — draw! silently `take`-ing
 ;; the first MAX-INST instances and dropping the rest, a correctness gap for
@@ -297,7 +313,7 @@
    :depthStencilFormat (some-> depth :format)})
 
 (defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
-  [device pipe gbuf atmosphere-buffer targets samplers binds]
+  [device pipe gbuf atmosphere-buffer ssao-buffer targets samplers binds]
   (w3/create-bind-group! device
     #js {:layout (w3/get-bind-group-layout pipe 0)
          :entries (into-array
@@ -306,6 +322,7 @@
                         (cond
                           (= b :uniform) #js {:binding i :resource #js {:buffer gbuf}}
                           (= b :atmosphere-uniform) #js {:binding i :resource #js {:buffer atmosphere-buffer}}
+                          (= b :ssao-uniform) #js {:binding i :resource #js {:buffer ssao-buffer}}
                           (:texture b)   #js {:binding i :resource (get-in targets [(:texture b) :view])}
                           (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
                       binds))}))
@@ -468,6 +485,7 @@
                    inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
                    gbuf (w3/create-buffer! device #js {:size 464 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    atmosphere-buffer (w3/create-buffer! device #js {:size 128 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   ssao-buffer (w3/create-buffer! device #js {:size 32 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -497,7 +515,9 @@
                    main-target (get targets :hdr)
                    depth-w (or (:width main-target) w)
                    depth-h (or (:height main-target) h)
-                   sdepth (w3/create-texture! device #js {:size #js [depth-w depth-h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
+                   sdepth (w3/create-texture! device #js {:size #js [depth-w depth-h] :format "depth24plus"
+                                                          :usage (bit-or (w3/texture-usage :render-attachment)
+                                                                         (w3/texture-usage :texture-binding))})
                    targets (assoc targets :screen-depth {:view (w3/create-view sdepth)
                                                          :width depth-w :height depth-h
                                                          :format "depth24plus"})
@@ -528,7 +548,7 @@
                                    (assoc m k {:pipe pipe
                                                :fullscreen (:fullscreen pd)
                                                :bundle-descriptor (render-bundle-descriptor fmt pd)
-                                               :bind (build-bind device pipe gbuf atmosphere-buffer targets samplers (:binds pd))})))
+                                               :bind (build-bind device pipe gbuf atmosphere-buffer ssao-buffer targets samplers (:binds pd))})))
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
@@ -542,7 +562,7 @@
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf
-                :atmosphere-buffer atmosphere-buffer :idx-count (:idx-count box)
+                :atmosphere-buffer atmosphere-buffer :ssao-buffer ssao-buffer :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
                 :material-textures (into {}
@@ -560,6 +580,7 @@
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
                 :post-evidence (atom nil)
+                :ssao-evidence (atom nil)
                 :atmosphere-evidence (atom nil)
                 :foliage-evidence (atom nil)
                 :streaming-evidence (atom nil)
@@ -708,9 +729,10 @@
    The GPU instance buffer itself grows (doubling) to fit however many
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
-  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf atmosphere-buffer idx-count targets pipelines graph
+  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf atmosphere-buffer ssao-buffer idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
-           atmosphere-evidence frame-evidence foliage-evidence world-overlay render-bundle-cache]} ir]
+           atmosphere-evidence ssao-evidence frame-evidence foliage-evidence world-overlay
+           render-bundle-cache]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
                   (swap! (fn [e]
@@ -763,6 +785,7 @@
         target (arr3 g :target [cxx 0 czz])
         ;; projection as data: FOV (deg) + near/far planes from globals (defaults = the old look)
         pnear (or (:near g) 0.5) pfar (or (:far g) 4000)
+        ssao (merge DEFAULT-SSAO (:ssao graph) (:ssao g) {:near pnear :far pfar})
         vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ w (max 1 h)) pnear pfar)
                    (look-at (vec eye) (vec target) [0 1 0]))
         adaptive-post (:adaptive-post graph)
@@ -833,6 +856,15 @@
     (w3/write-buffer! queue gbuf 0 gf)
     (w3/write-buffer! queue atmosphere-buffer 0
                       (js/Float32Array. (clj->js (render-atmosphere/uniform-values atmosphere))))
+    (w3/write-buffer! queue ssao-buffer 0
+                      (js/Float32Array.
+                       (clj->js [(:radius-px ssao) (:intensity ssao) (:bias ssao) (:power ssao)
+                                 (:near ssao) (:far ssao) (:fade-start ssao) (:fade-end ssao)])))
+    (some-> ssao-evidence
+            (reset! (assoc ssao :schema :kotoba.webgpu/ssao-evidence-v1
+                                :sample-count 12 :deterministic? true
+                                :resolution [(get-in targets [:ssao :width])
+                                             (get-in targets [:ssao :height])])))
     (some-> atmosphere-evidence
             (reset! (assoc atmosphere :pass :fullscreen-hdr :uniform-floats 32)))
     ;; grow the GPU instance buffer first if this frame's instance count
@@ -852,7 +884,8 @@
                    (get-in targets [k :view]))))
           frame-passes (if post-degraded? (:passes adaptive-post) (:passes graph))
           _ (some-> post-evidence
-                    (reset! {:tier (if post-degraded? :direct-aces :hdr-bloom)
+                    (reset! {:tier (if post-degraded? :hdr-ssao-aces :hdr-ssao-bloom)
+                             :ssao? true
                              :shadow-cascades (if post-degraded? 1 4)
                              :instances ninst
                              :threshold (:max-instances adaptive-post)}))
@@ -937,6 +970,11 @@
   [ctx]
   (some-> ctx :atmosphere-evidence deref))
 
+(defn ssao-evidence
+  "Last normalized data-driven SSAO contract submitted to the GPU."
+  [ctx]
+  (some-> ctx :ssao-evidence deref))
+
 (defn material-texture-evidence
   "Uploaded PBR texture formats and dimensions (never includes pixel data)."
   [ctx]
@@ -959,6 +997,8 @@
    :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
    :device-loss (some-> ctx :device-loss deref)
    :frames (some-> ctx :frame-evidence deref)
+   :post (some-> ctx :post-evidence deref)
+   :ssao (some-> ctx :ssao-evidence deref)
    :atmosphere (some-> ctx :atmosphere-evidence deref)
    :world-streaming (some-> ctx :streaming-evidence deref)
    :geometry-biomes (:geometry-biomes ctx)
