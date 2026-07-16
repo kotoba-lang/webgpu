@@ -22,7 +22,9 @@
       (is (naga-valid? "hdr_composite" (shaders/hdr-composite-shader)))
       (doseq [cascade (range 4)]
         (is (naga-valid? (str "cascade_depth_" cascade)
-                         (shaders/cascaded-shadow-shader cascade)))))))
+                         (shaders/cascaded-shadow-shader cascade)))
+        (is (naga-valid? (str "foliage_depth_" cascade)
+                         (shaders/cascaded-foliage-shadow-shader cascade)))))))
 
 (let [{:keys [fail error]} (run-tests 'cascade-shadow-test)]
   (when (pos? (+ fail error))
