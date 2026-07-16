@@ -17,6 +17,7 @@
             [kami.webgpu.quality :as quality]
             [kotoba.webgl :as webgl]
             [kotoba.render.environment :as render-environment]
+            [kotoba.render.atmosphere :as render-atmosphere]
             [kotoba.render.foliage :as render-foliage]
             [kotoba.render.instance :as render-instance]
             [kotoba.render.mesh :as render-mesh]
@@ -154,6 +155,7 @@
    Reorder/add passes, swap shaders, or retarget by editing this map (or pass {:graph ...}
    to init!). Each pipeline's :binds wires its group-0 resources by name."
   {:shaders   {:lit SHADER :lit-direct (shaders/cascaded-textured-lit-shader)
+               :atmosphere (shaders/atmosphere-cloud-shader)
                :bloom (shaders/bloom-shader)
                :composite (shaders/hdr-composite-shader)
                :depth0 (shaders/cascaded-foliage-shadow-shader 0)
@@ -201,6 +203,10 @@
                                      {:texture :metallic-roughness} {:sampler :material}
                                      {:texture :irradiance} {:texture :prefiltered-specular}
                                      {:texture :brdf-lut}]}
+               :atmosphere {:shader :atmosphere :fullscreen true :color HDR-FORMAT
+                            :binds [:atmosphere-uniform]}
+               :atmosphere-direct {:shader :atmosphere :fullscreen true :color :screen
+                                   :binds [:atmosphere-uniform]}
                :bloom {:shader :bloom :fullscreen true :color HDR-FORMAT
                        :binds [{:texture :hdr} {:sampler :linear}]}
                :composite {:shader :composite :fullscreen true :color :screen
@@ -209,7 +215,8 @@
                {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
                {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
                {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
-               {:pipeline :main :color :hdr :depth :screen-depth :clear :sky}
+               {:pipeline :atmosphere :color :hdr :clear [0 0 0]}
+               {:pipeline :main :color :hdr :depth :screen-depth :load? true}
                {:pipeline :bloom :color :bloom :clear [0 0 0]}
                {:pipeline :composite :color :screen :clear [0 0 0]}]
    ;; Keep cinematic post-processing for ordinary scenes. At saturation,
@@ -217,7 +224,8 @@
    ;; bloom/intermediate-target work that would otherwise back-pressure the GPU.
    :adaptive-post {:max-instances 256
                    :passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
-                            {:pipeline :main-direct :color :screen :depth :direct-depth :clear :sky}]}})
+                            {:pipeline :atmosphere-direct :color :screen :clear [0 0 0]}
+                            {:pipeline :main-direct :color :screen :depth :direct-depth :load? true}]}})
 
 ;; ADR-2607100100 M6: this used to be a hard cap — draw! silently `take`-ing
 ;; the first MAX-INST instances and dropping the rest, a correctness gap for
@@ -281,7 +289,7 @@
     (w3/create-render-pipeline! device desc)))
 
 (defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
-  [device pipe gbuf targets samplers binds]
+  [device pipe gbuf atmosphere-buffer targets samplers binds]
   (w3/create-bind-group! device
     #js {:layout (w3/get-bind-group-layout pipe 0)
          :entries (into-array
@@ -289,6 +297,7 @@
                       (fn [i b]
                         (cond
                           (= b :uniform) #js {:binding i :resource #js {:buffer gbuf}}
+                          (= b :atmosphere-uniform) #js {:binding i :resource #js {:buffer atmosphere-buffer}}
                           (:texture b)   #js {:binding i :resource (get-in targets [(:texture b) :view])}
                           (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
                       binds))}))
@@ -448,6 +457,7 @@
                    box (:box geos)
                    inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
                    gbuf (w3/create-buffer! device #js {:size 464 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   atmosphere-buffer (w3/create-buffer! device #js {:size 128 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -507,7 +517,7 @@
                                  (let [pipe (build-pipeline device fmt (:shaders graph) pd)]
                                    (assoc m k {:pipe pipe
                                                :fullscreen (:fullscreen pd)
-                                               :bind (build-bind device pipe gbuf targets samplers (:binds pd))})))
+                                               :bind (build-bind device pipe gbuf atmosphere-buffer targets samplers (:binds pd))})))
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
@@ -519,7 +529,8 @@
                 :adapter-options (:adapter-options opts)
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
-                :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf :idx-count (:idx-count box)
+                :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf
+                :atmosphere-buffer atmosphere-buffer :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
                 :material-textures (into {}
@@ -537,6 +548,7 @@
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
                 :post-evidence (atom nil)
+                :atmosphere-evidence (atom nil)
                 :foliage-evidence (atom nil)
                 :lod-state (atom {}) :lod-evidence (atom nil)
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
@@ -677,9 +689,9 @@
    The GPU instance buffer itself grows (doubling) to fit however many
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
-  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf idx-count targets pipelines graph
+  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf atmosphere-buffer idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
-           frame-evidence foliage-evidence world-overlay]} ir]
+           atmosphere-evidence frame-evidence foliage-evidence world-overlay]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
                   (swap! (fn [e]
@@ -724,6 +736,10 @@
         horizon (arr3 sky :horizon [0.7 0.8 0.9])
         sun-dir (arr3 sky :sun-dir [-0.4 -0.85 -0.35])
         sun (arr3 sky :sun [1 0.96 0.85])
+        atmosphere-authored (merge {:zenith (arr3 sky :zenith horizon)
+                                    :horizon horizon :sun-color sun :sun-direction sun-dir}
+                                   (:atmosphere g))
+        atmosphere (render-atmosphere/atmosphere atmosphere-authored)
         eye (arr3 g :eye [(+ cxx 60) 80 (+ czz 60)])
         target (arr3 g :target [cxx 0 czz])
         ;; projection as data: FOV (deg) + near/far planes from globals (defaults = the old look)
@@ -796,6 +812,10 @@
                      :wind-instance-count (count (filter #(pos? (or (:wind-strength %) 0.0)) insts))
                      :direction [wind-x wind-z] :time (:time wind) :speed (:speed wind)}))
     (w3/write-buffer! queue gbuf 0 gf)
+    (w3/write-buffer! queue atmosphere-buffer 0
+                      (js/Float32Array. (clj->js (render-atmosphere/uniform-values atmosphere))))
+    (some-> atmosphere-evidence
+            (reset! (assoc atmosphere :pass :fullscreen-hdr :uniform-floats 32)))
     ;; grow the GPU instance buffer first if this frame's instance count
     ;; exceeds its current capacity (ADR-2607100100 M6) — then only
     ;; re-upload on a real cache miss OR a just-grown (contents-undefined)
@@ -827,11 +847,11 @@
                             (w3/set-index-buffer! p gi "uint16")
                             (w3/draw-indexed! p gn gcount 0 0 gfirst)))))]
       ;; run the graph's passes in order (EDN-driven)
-      (doseq [{:keys [pipeline color depth clear clear-depth cascade draw]} frame-passes]
+      (doseq [{:keys [pipeline color depth clear clear-depth cascade draw load?]} frame-passes]
         (let [{:keys [pipe bind fullscreen]} (get pipelines pipeline)
               catts (if color
                       (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
-                        #js [#js {:view (vw color nil) :loadOp "clear" :storeOp "store"
+                        #js [#js {:view (vw color nil) :loadOp (if load? "load" "clear") :storeOp "store"
                                   :clearValue #js {:r (c 0) :g (c 1) :b (c 2) :a 1}}])
                       #js [])
               pass-desc #js {:colorAttachments catts}
@@ -875,6 +895,11 @@
   [ctx]
   (some-> ctx :post-evidence deref))
 
+(defn atmosphere-evidence
+  "Last normalized atmosphere/cloud contract submitted to the GPU."
+  [ctx]
+  (some-> ctx :atmosphere-evidence deref))
+
 (defn material-texture-evidence
   "Uploaded PBR texture formats and dimensions (never includes pixel data)."
   [ctx]
@@ -897,6 +922,7 @@
    :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
    :device-loss (some-> ctx :device-loss deref)
    :frames (some-> ctx :frame-evidence deref)
+   :atmosphere (some-> ctx :atmosphere-evidence deref)
    :geometry-biomes (:geometry-biomes ctx)
    :webgpu-init-error (:webgpu-init-error ctx)})
 
