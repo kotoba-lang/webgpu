@@ -143,6 +143,26 @@
            (:uploaded-biome-vertex-count evidence)))
     (is (= [[2 1 3] [4 0 7]] (:layer-index-mappings evidence)))))
 
+(deftest uploaded-decal-evidence-proves-projection-alpha-pbr-and-bias
+  (let [mesh {:positions [[0 0.01 0] [1 0.01 0] [0 0.01 1]]
+              :normals [[0 1 0] [0 1 0] [0 1 0]]
+              :uvs [[0 0] [1 0] [0 1]] :indices [0 2 1]}
+        decal {:schema :kotoba.render/terrain-decal-v1
+               :projection :terrain-following :depth-bias 0.009
+               :alpha-mode :mask :alpha-cutoff 0.15
+               :pbr {:metallic 0.0 :roughness 0.8 :normal-scale 0.7}}
+        specs {:wear {:type :mesh :mesh mesh :decal decal}
+               :ordinary {:type :mesh :mesh mesh}}
+        meshes (into {} (map (fn [[id spec]] [id (ir/mesh-from-spec spec)]) specs))
+        evidence (ir/geometry-decal-evidence specs meshes)]
+    (is (= :kotoba.webgpu/decal-evidence-v1 (:schema evidence)))
+    (is (= 1 (:uploaded-decal-mesh-count evidence)))
+    (is (= 3 (:uploaded-decal-vertex-count evidence)))
+    (is (= [:terrain-following] (:projections evidence)))
+    (is (= [:mask] (:alpha-modes evidence)))
+    (is (= [0.009 0.009] (:depth-bias-range evidence)))
+    (is (= 1 (:pbr-bound-count evidence)))))
+
 (deftest terrain-road-ribbons-dispatch-material-parts-and-lods
   (let [base {:type :road-ribbon
               :path [[0.0 0.0] [20.0 0.0] [28.0 12.0]]

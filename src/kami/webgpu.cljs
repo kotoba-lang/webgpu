@@ -448,6 +448,7 @@
                                                     [k (ir/mesh-from-spec spec)]))
                                           geom-specs)
                    geometry-biomes (ir/geometry-biome-evidence baked-geometries)
+                   geometry-decals (ir/geometry-decal-evidence geom-specs baked-geometries)
                    geos (reduce-kv (fn [acc k spec]
                                      (let [[v i] (mesh->buffers spec)]
                                        (assoc acc k {:vbuf (mkbuf v (w3/buffer-usage :vertex))
@@ -526,6 +527,7 @@
                 :device-loss device-loss
                 :frame-evidence frame-evidence
                 :geometry-biomes geometry-biomes
+                :geometry-decals geometry-decals
                 :adapter-options (:adapter-options opts)
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
@@ -924,6 +926,7 @@
    :frames (some-> ctx :frame-evidence deref)
    :atmosphere (some-> ctx :atmosphere-evidence deref)
    :geometry-biomes (:geometry-biomes ctx)
+   :geometry-decals (:geometry-decals ctx)
    :webgpu-init-error (:webgpu-init-error ctx)})
 
 (defn settle!
