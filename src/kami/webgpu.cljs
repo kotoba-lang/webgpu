@@ -381,7 +381,8 @@
           geos (reduce-kv (fn [result kind spec]
                             (assoc result kind (webgl/upload-mesh! viewport (ir/mesh-from-spec spec))))
                           {} geom-specs)]
-      (js/Promise.resolve (assoc viewport :geos geos :instance-cache (atom nil))))
+      (js/Promise.resolve (assoc viewport :geos geos :instance-cache (atom nil)
+                                 :streaming-evidence (atom nil))))
     (js/Promise.reject (js/Error. "Neither WebGPU nor WebGL2 is available"))))
 
 (defn init!
@@ -552,6 +553,7 @@
                 :post-evidence (atom nil)
                 :atmosphere-evidence (atom nil)
                 :foliage-evidence (atom nil)
+                :streaming-evidence (atom nil)
                 :lod-state (atom {}) :lod-evidence (atom nil)
                 ;; ADR-2607100100 M4 investigation: a static scene's :instances is the
                 ;; SAME value (by reference) across draw! calls in normal use (compose
@@ -925,6 +927,7 @@
    :device-loss (some-> ctx :device-loss deref)
    :frames (some-> ctx :frame-evidence deref)
    :atmosphere (some-> ctx :atmosphere-evidence deref)
+   :world-streaming (some-> ctx :streaming-evidence deref)
    :geometry-biomes (:geometry-biomes ctx)
    :geometry-decals (:geometry-decals ctx)
    :webgpu-init-error (:webgpu-init-error ctx)})
@@ -971,6 +974,7 @@
   "Draw Render-IR through the backend selected by init!: WebGPU first,
   WebGL2 fallback. Callers keep one backend-neutral contract."
   [ctx render-ir]
+  (some-> ctx :streaming-evidence (reset! (:streaming render-ir)))
   (if (= :webgl2 (:backend ctx)) (draw-webgl! ctx render-ir) (draw-webgpu! ctx render-ir)))
 
 (defn inst-buffer-capacity
