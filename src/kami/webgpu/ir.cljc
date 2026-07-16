@@ -204,6 +204,22 @@
                                 sort
                                 vec)}))
 
+(defn geometry-decal-evidence
+  "Summarize uploaded terrain-decal contracts without exposing texture pixels.
+   The geometry is already physically normal-biased by the portable baker;
+   this proves the executor received the matching projection/material metadata."
+  [specs meshes]
+  (let [entries (keep (fn [[id {:keys [decal]}]]
+                        (when decal [id decal (get meshes id)])) specs)
+        biases (map #(get-in % [1 :depth-bias]) entries)]
+    {:schema :kotoba.webgpu/decal-evidence-v1
+     :uploaded-decal-mesh-count (count entries)
+     :uploaded-decal-vertex-count (reduce + 0 (map #(count (get-in % [2 :positions])) entries))
+     :projections (->> entries (map #(get-in % [1 :projection])) distinct sort vec)
+     :alpha-modes (->> entries (map #(get-in % [1 :alpha-mode])) distinct sort vec)
+     :depth-bias-range (when (seq biases) [(apply min biases) (apply max biases)])
+     :pbr-bound-count (count (filter #(map? (get-in % [1 :pbr])) entries))}))
+
 (defn instance
   "An instanced cuboid. `size` is `[width height depth]`; legacy `[w h]`
    remains supported and means `[w h w]`. Pure data. Merge a `material` map in
