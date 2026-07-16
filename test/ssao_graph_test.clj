@@ -11,11 +11,24 @@
   (is (str/includes? source "(w3/texture-usage :texture-binding)"))
   (is (= 2 (count (re-seq #"\{:pipeline :ssao :color :ssao" source)))
       "cinematic and saturation tiers both retain contact AO")
-  (is (str/includes? source ":sample-count (:sample-count ssao) :deterministic? true"))
+  (is (str/includes? source ":sample-count (if ssao-buffer (:sample-count ssao) 0)"))
+  (is (str/includes? source ":deterministic? true"))
   (is (str/includes? source "defn adaptive-ssao-graph"))
   (is (str/includes? source ":resolution-scale scale"))
   (is (str/includes? source ":size 48"))
   (is (str/includes? source ":kotoba.webgpu/ssao-evidence-v1")))
+
+(deftest disabled-ssao-removes-all-gpu-work
+  (is (str/includes? source "(update :shaders dissoc :ssao)"))
+  (is (str/includes? source "(update :targets dissoc :ssao)"))
+  (is (str/includes? source "(update :pipelines dissoc :ssao :composite :ao-composite)"))
+  (is (str/includes? source "ssao-buffer (when ssao-enabled?"))
+  (is (str/includes? source "sdepth (when ssao-enabled?"))
+  (is (str/includes? source ":depth :direct-depth"))
+  (is (str/includes? source "(when ssao-buffer"))
+  (is (str/includes? source ":resource-allocated? (boolean ssao-buffer)"))
+  (is (str/includes? source ":sampled-by-composite? (boolean ssao-buffer)"))
+  (is (str/includes? source ":direct-no-ssao")))
 
 (let [{:keys [fail error]} (run-tests 'ssao-graph-test)]
   (when (pos? (+ fail error))

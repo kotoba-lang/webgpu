@@ -164,14 +164,28 @@
         scale (-> (or resolution-scale 0.5) double (max 0.125) (min 1.0))
         direct-passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
                        {:pipeline :atmosphere-direct :color :screen :clear [0 0 0]}
-                       {:pipeline :main-direct :color :screen :depth :screen-depth :load? true}]]
-    (cond-> (assoc graph :ssao-tier (assoc tier :enabled? enabled?
-                                                :sample-count samples
-                                                :resolution-scale scale))
-      enabled? (assoc-in [:targets :ssao :scale] scale)
-      enabled? (assoc-in [:ssao :sample-count] samples)
-      (not enabled?) (assoc :passes direct-passes
-                            :adaptive-post {:max-instances 0 :passes direct-passes}))))
+                       {:pipeline :main-direct :color :screen :depth :direct-depth :load? true}]]
+    (if enabled?
+      (-> graph
+          (assoc :ssao-tier (assoc tier :enabled? true
+                                        :sample-count samples
+                                        :resolution-scale scale))
+          (assoc-in [:targets :ssao :scale] scale)
+          (assoc-in [:ssao :sample-count] samples))
+      ;; This is deliberately stronger than an intensity=0 tier. Remove every
+      ;; GPU-owned SSAO object before allocation so a software adapter does not
+      ;; pay for an unused texture, pipeline, bind group, uniform upload, pass,
+      ;; or composite sample.
+      (-> graph
+          (assoc :ssao-tier (assoc tier :enabled? false
+                                        :sample-count 0
+                                        :resolution-scale 0.0)
+                 :passes direct-passes
+                 :adaptive-post {:max-instances 0 :passes direct-passes})
+          (update :shaders dissoc :ssao)
+          (update :targets dissoc :ssao)
+          (update :pipelines dissoc :ssao :composite :ao-composite)
+          (dissoc :ssao)))))
 
 (def default-graph
   "The frame, described as data. :passes is an ordered array — the shadow pass renders
@@ -506,7 +520,9 @@
                    inst-buffer (atom {:buf (mk-inst-buffer device INITIAL-INST-CAPACITY) :capacity INITIAL-INST-CAPACITY})
                    gbuf (w3/create-buffer! device #js {:size 464 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    atmosphere-buffer (w3/create-buffer! device #js {:size 128 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
-                   ssao-buffer (w3/create-buffer! device #js {:size 48 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   ssao-enabled? (get-in graph [:ssao-tier :enabled?] true)
+                   ssao-buffer (when ssao-enabled?
+                                 (w3/create-buffer! device #js {:size 48 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))}))
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -536,12 +552,14 @@
                    main-target (get targets :hdr)
                    depth-w (or (:width main-target) w)
                    depth-h (or (:height main-target) h)
-                   sdepth (w3/create-texture! device #js {:size #js [depth-w depth-h] :format "depth24plus"
-                                                          :usage (bit-or (w3/texture-usage :render-attachment)
-                                                                         (w3/texture-usage :texture-binding))})
-                   targets (assoc targets :screen-depth {:view (w3/create-view sdepth)
+                   sdepth (when ssao-enabled?
+                            (w3/create-texture! device #js {:size #js [depth-w depth-h] :format "depth24plus"
+                                                           :usage (bit-or (w3/texture-usage :render-attachment)
+                                                                          (w3/texture-usage :texture-binding))}))
+                   targets (cond-> targets
+                             sdepth (assoc :screen-depth {:view (w3/create-view sdepth)
                                                          :width depth-w :height depth-h
-                                                         :format "depth24plus"})
+                                                         :format "depth24plus"}))
                    direct-depth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
                    targets (assoc targets :direct-depth {:view (w3/create-view direct-depth)
                                                          :width w :height h :format "depth24plus"})
@@ -580,6 +598,8 @@
                 :geometry-biomes geometry-biomes
                 :geometry-decals geometry-decals
                 :adapter-options (:adapter-options opts)
+                :world-color-format (if ssao-enabled?
+                                      (get-in targets [:hdr :format]) fmt)
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf
@@ -750,7 +770,7 @@
    The GPU instance buffer itself grows (doubling) to fit however many
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
-  [{:keys [device queue ctx w h vbuf ibuf inst-buffer gbuf atmosphere-buffer ssao-buffer idx-count targets pipelines graph
+  [{:keys [device queue ctx fmt w h vbuf ibuf inst-buffer gbuf atmosphere-buffer ssao-buffer idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
            atmosphere-evidence ssao-evidence frame-evidence foliage-evidence world-overlay
            render-bundle-cache]} ir]
@@ -877,18 +897,27 @@
     (w3/write-buffer! queue gbuf 0 gf)
     (w3/write-buffer! queue atmosphere-buffer 0
                       (js/Float32Array. (clj->js (render-atmosphere/uniform-values atmosphere))))
-    (w3/write-buffer! queue ssao-buffer 0
-                      (js/Float32Array.
-                       (clj->js [(:radius-px ssao) (:intensity ssao) (:bias ssao) (:power ssao)
-                                 (:near ssao) (:far ssao) (:fade-start ssao) (:fade-end ssao)
-                                 (:sample-count ssao) 0.0 0.0 0.0])))
+    (when ssao-buffer
+      (w3/write-buffer! queue ssao-buffer 0
+                        (js/Float32Array.
+                         (clj->js [(:radius-px ssao) (:intensity ssao) (:bias ssao) (:power ssao)
+                                   (:near ssao) (:far ssao) (:fade-start ssao) (:fade-end ssao)
+                                   (:sample-count ssao) 0.0 0.0 0.0]))))
     (some-> ssao-evidence
             (reset! (assoc ssao :schema :kotoba.webgpu/ssao-evidence-v1
-                                :sample-count (:sample-count ssao) :deterministic? true
-                                :enabled? (get-in graph [:ssao-tier :enabled?] true)
-                                :resolution-scale (get-in graph [:ssao-tier :resolution-scale] 0.5)
-                                :resolution [(get-in targets [:ssao :width])
-                                             (get-in targets [:ssao :height])])))
+                                :sample-count (if ssao-buffer (:sample-count ssao) 0)
+                                :deterministic? true
+                                :enabled? (boolean ssao-buffer)
+                                :resource-allocated? (boolean ssao-buffer)
+                                :pass-count (if ssao-buffer 1 0)
+                                :sampled-by-composite? (boolean ssao-buffer)
+                                :resolution-scale (if ssao-buffer
+                                                    (get-in graph [:ssao-tier :resolution-scale] 0.5)
+                                                    0.0)
+                                :resolution (if ssao-buffer
+                                              [(get-in targets [:ssao :width])
+                                               (get-in targets [:ssao :height])]
+                                              [0 0]))))
     (some-> atmosphere-evidence
             (reset! (assoc atmosphere :pass :fullscreen-hdr :uniform-floats 32)))
     ;; grow the GPU instance buffer first if this frame's instance count
@@ -908,8 +937,10 @@
                    (get-in targets [k :view]))))
           frame-passes (if post-degraded? (:passes adaptive-post) (:passes graph))
           _ (some-> post-evidence
-                    (reset! {:tier (if post-degraded? :hdr-ssao-aces :hdr-ssao-bloom)
-                             :ssao? true
+                    (reset! {:tier (if ssao-buffer
+                                     (if post-degraded? :hdr-ssao-aces :hdr-ssao-bloom)
+                                     :direct-no-ssao)
+                             :ssao? (boolean ssao-buffer)
                              :shadow-cascades (if post-degraded? 1 4)
                              :instances ninst
                              :threshold (:max-instances adaptive-post)}))
@@ -962,11 +993,14 @@
           (w3/end-pass! rp)
           ;; Arbitrary/skinned meshes join the graph after the world geometry
           ;; pass and before post-processing, on the exact same HDR/depth views.
-          (when (and (not fullscreen) color depth (= depth :screen-depth))
+          (when (and (not fullscreen) color depth
+                     (contains? #{:screen-depth :direct-depth} depth))
             (when-let [encode! (some-> world-overlay deref)]
               (encode! enc {:color-view (vw color nil)
                             :depth-view (vw depth cascade)
-                            :color-format (get-in targets [color :format])})))))
+                            :color-format (if (= color :screen)
+                                            fmt
+                                            (get-in targets [color :format]))})))))
       (w3/submit! queue [(w3/finish! enc)])
       (some-> frame-evidence
               (swap! (fn [e]
