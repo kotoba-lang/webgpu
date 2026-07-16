@@ -4,6 +4,21 @@ kami-webgpu — declarative WebGPU + UI/input/audio/state from EDN (hiccup for t
 
 ## Unreleased
 
+### Reuse geometry command streams with WebGPU render bundles (2026-07-16)
+
+World streaming changes instance-buffer contents, but not the pipeline/bind-group/
+geometry draw command sequence. The renderer now records one compatible
+`GPURenderBundle` per active geometry pipeline and replays it across frames. A
+geometry-group signature invalidates the bundle when resident draw counts change;
+instance-buffer growth clears all bundles because it replaces the GPU buffer handle.
+Backend frame evidence reports `:render-bundle-count` for deterministic browser gates.
+
+Royale's fixed-frame Chromium SwiftShader gate at 639 submitted instances recorded
+two bundles, one queue submit per frame, no GPU validation errors, and no device loss.
+The measured median remained 73.6 ms (p95 76.0 ms), so this removes JS command-recording
+work but does not pretend to close the software-GPU raster wall or the 16.7 ms hardware
+target. A tested half-resolution-HDR alternative regressed to 75.2 ms and was rejected.
+
 ### `draw!` caches per-frame instance-buffer work for a static scene (2026-07-10)
 
 Found via `com-junkawasaki/root` ADR-2607100100's M4 investigation: a real-browser
