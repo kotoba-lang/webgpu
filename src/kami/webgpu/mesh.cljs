@@ -169,13 +169,15 @@
 (defn model-matrix
   "Column-major TRS model matrix. Rotation is XYZ Euler radians and scale
   defaults to identity. Shared here so applications never own GPU matrices."
-  [{:keys [translation rotation scale]
+  [{:keys [matrix translation rotation scale]
     :or {translation [0 0 0] rotation [0 0 0] scale [1 1 1]}}]
-  (let [[rx ry rz] rotation]
-    (m4-mul (translation-matrix translation)
-            (m4-mul (rotation-z-matrix rz)
-                    (m4-mul (rotation-y-matrix ry)
-                            (m4-mul (rotation-x-matrix rx) (scale-matrix scale)))))))
+  (if matrix
+    (js/Float32Array. (clj->js matrix))
+    (let [[rx ry rz] rotation]
+      (m4-mul (translation-matrix translation)
+              (m4-mul (rotation-z-matrix rz)
+                      (m4-mul (rotation-y-matrix ry)
+                              (m4-mul (rotation-x-matrix rx) (scale-matrix scale))))))))
 
 ;; --- the shader: morph blend (glTF POSITION-delta convention) then optional
 ;; 4-joint linear-blend skinning, in one vertex stage; flat single-color
@@ -196,6 +198,7 @@
   toon_smooth: f32,
   _pad2: u32,
   material_params: vec4<f32>,
+  uv_transform: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -243,7 +246,7 @@ fn vs(
   out.clip = u.mvp * world;
   out.n = normal;
   out.local_pos = position;
-  out.uv = uv_in;
+  out.uv = uv_in * u.uv_transform.zw + u.uv_transform.xy;
   return out;
 }
 
@@ -414,10 +417,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
           joint-count (if has-skin? (inc (apply max 0 (mapcat identity joints))) 0)
           joint-matrices-buf (w3/create-buffer! device #js {:size (max 64 (* 64 (max 1 joint-count)))
                                                          :usage (bit-or (w3/buffer-usage :storage) (w3/buffer-usage :copy-dst))})
-          ;; 160 bytes: existing uniforms plus vec4 material parameters.
+          ;; 176 bytes: existing uniforms + material params + UV transform.
           ;; pattern_kind(16) + pattern_params(16) + shade_kind/toon_threshold/
           ;; toon_smooth/_pad2(16) — see `draw!`'s `gdata`.
-          gbuf (w3/create-buffer! device #js {:size 160 :usage (bit-or (w3/buffer-usage :uniform)
+          gbuf (w3/create-buffer! device #js {:size 176 :usage (bit-or (w3/buffer-usage :uniform)
                                                                        (w3/buffer-usage :copy-dst))})]
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
@@ -452,14 +455,16 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
             joint-count joint-matrices-buf gbuf]}
     mvp color morph-weights joint-matrices
-    {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth metallic roughness]
+    {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth metallic roughness
+            uv-offset uv-scale]
      :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]
-          shade-kind 0 toon-threshold 0.4 toon-smooth 0.08 metallic 0.0 roughness 0.5}}]
+          shade-kind 0 toon-threshold 0.4 toon-smooth 0.08 metallic 0.0 roughness 0.5
+          uv-offset [0.0 0.0] uv-scale [1.0 1.0]}}]
    (let [q (w3/device-queue device)
-         ;; 144 bytes / 4 = 36 floats: mvp(16) + color(4) + color_b(4) +
+         ;; 176 bytes / 4 = 44 floats: mvp(16) + color(4) + color_b(4) +
          ;; counts+kind(4, u32 view) + params(4) + shade_kind/toon_threshold/
-         ;; toon_smooth/_pad2(4, mixed u32/f32 view).
-         gdata (js/Float32Array. 40)]
+         ;; toon_smooth/_pad2(4, mixed u32/f32 view) + material(4) + uv_transform(4).
+         gdata (js/Float32Array. 44)]
      (.set gdata mvp 0)
      (.set gdata (f32 (conj (vec color) 1.0)) 16)
      (.set gdata (f32 (conj (vec color-b) 1.0)) 20)
@@ -471,6 +476,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
      (aset gdata 34 toon-smooth)
      (aset gdata 36 metallic)
      (aset gdata 37 roughness)
+     (.set gdata (f32 (concat uv-offset uv-scale)) 40)
      (w3/write-buffer! q gbuf gdata)
     (when (pos? morph-count)
       (w3/write-buffer! q morph-weights-buf (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
@@ -518,6 +524,33 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                      {:backend :webgpu :device device :queue (w3/device-queue device) :ctx ctx
                       :depth depth :mesh-context (init! device fmt) :width w :height h})))
           (.catch (fn [_] (fallback)))))))
+
+(defn sync-canvas-size!
+  "Match the drawing buffer to the canvas' CSS layout size and return the
+  (possibly updated) viewport. init-canvas! samples clientWidth/clientHeight
+  exactly once, so a canvas that is hidden at init time (e.g. a stage behind
+  a non-default route: clientWidth 0 → 1×1 buffer) stays one stretched pixel
+  forever without this. Call it whenever the canvas may have changed size —
+  it is cheap when nothing changed and a no-op while the canvas is hidden.
+  WebGPU recreates the depth attachment at the new size (the swap-chain
+  texture follows canvas width/height automatically); WebGL2's default
+  framebuffer resizes with the canvas, and every kami.webgl render pass sets
+  gl.viewport from the viewport map's :width/:height each frame."
+  [viewport canvas]
+  (let [cw (.-clientWidth canvas) ch (.-clientHeight canvas)]
+    (if (or (zero? cw) (zero? ch)
+            (and (= cw (:width viewport)) (= ch (:height viewport))))
+      viewport
+      (do (set! (.-width canvas) cw)
+          (set! (.-height canvas) ch)
+          (if (= :webgpu (:backend viewport))
+            (let [device (:device viewport)
+                  depth (w3/create-texture! device
+                          #js {:size #js [cw ch] :format "depth24plus"
+                               :usage (w3/texture-usage :render-attachment)})]
+              (when-let [old (:depth viewport)] (w3/destroy-texture! old))
+              (assoc viewport :width cw :height ch :depth depth))
+            (assoc viewport :width cw :height ch))))))
 
 (defn render-frame!
   "Render one arbitrary mesh frame through the canonical W3C binding.
@@ -622,3 +655,43 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                color (or morph-weights [])
                joint-matrices material))
       (w3/end-pass! pass))))
+
+(defn render-skinned-scene!
+  "Render multiple skinned parts in one depth-preserving frame on either
+  backend. Each draw is {:buffers :joint-matrices :color :transform
+  :morph-weights :material}. On WebGPU this is one clear + one render pass;
+  on the WebGL2 fallback every part is CPU-skinned into its vertex buffer
+  first (same math as webgl/render-skinned-mesh-frame!), then all parts go
+  through one webgl/render-mesh-scene! call so depth is preserved across
+  parts instead of the last part clearing the previous ones."
+  [viewport draws eye target]
+  (let [{:keys [device queue ctx depth mesh-context width height]} viewport
+        projection (view-projection eye target (/ width height))
+        prepared (mapv (fn [{:keys [transform] :as draw}]
+                         (assoc draw :mvp (m4-mul projection (model-matrix (or transform {})))))
+                       draws)]
+    (if (= :webgl2 (:backend viewport))
+      (let [gl (:gl viewport)]
+        (doseq [{:keys [buffers joint-matrices]} prepared
+                :when (seq (:joints buffers))]
+          (let [{:keys [positions normals joints weights vertex-buffer]} buffers
+                skinned-positions (mapv #(webgl/skin-vector %1 %2 %3 joint-matrices false)
+                                        positions joints weights)
+                skinned-normals (mapv #(webgl/skin-vector %1 %2 %3 joint-matrices true)
+                                      normals joints weights)
+                vertices (js/Float32Array. (clj->js (mapcat concat skinned-positions skinned-normals)))]
+            (.bindBuffer gl (.-ARRAY_BUFFER gl) vertex-buffer)
+            (.bufferSubData gl (.-ARRAY_BUFFER gl) 0 vertices)))
+        (webgl/render-mesh-scene! viewport prepared))
+      (let [encoder (w3/create-command-encoder! device)
+            pass (w3/begin-render-pass!
+                  encoder #js {:colorAttachments #js [#js {:view (w3/create-view (w3/current-texture ctx))
+                                                           :loadOp "clear" :storeOp "store"
+                                                           :clearValue #js {:r 0.035 :g 0.055 :b 0.10 :a 1}}]
+                               :depthStencilAttachment #js {:view (w3/create-view depth)
+                                                            :depthLoadOp "clear" :depthStoreOp "store"
+                                                            :depthClearValue 1}})]
+        (doseq [{:keys [buffers color joint-matrices material mvp morph-weights]} prepared]
+          (draw! mesh-context pass buffers mvp color (or morph-weights []) joint-matrices material))
+        (w3/end-pass! pass)
+        (w3/submit! queue [(w3/finish! encoder)])))))
