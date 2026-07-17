@@ -171,7 +171,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
        (when bloom? " c+=textureSample(bloom_tex,linear_sampler,i.uv).rgb*0.12;")
        (when ao? " c*=mix(1.0,textureSample(ao_tex,linear_sampler,i.uv).r,0.58);")
        " var edge=0.0; let centerD=textureLoad(scene_depth,p,0); if(style.outline_enabled==1u && centerD<0.9999){ let centerRaw=nraw(p,dims); let centerValid=nvalid(centerRaw); let centerN=ndecode(centerRaw); let radius=max(1,i32(round(style.outline_width_px))); for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){if(x!=0||y!=0){let q=clamp(p+vec2<i32>(x,y)*radius,vec2(0),dims-1); let de=abs(textureLoad(scene_depth,q,0)-centerD)/max(style.depth_threshold,1e-6); let sampleRaw=nraw(q,dims); var ne=0.0; if(centerValid && nvalid(sampleRaw)){ne=(1.0-dot(centerN,ndecode(sampleRaw)))/max(style.normal_threshold,1e-6);} edge=max(edge,clamp(max(de,ne),0.0,1.0));}}}}
- c*=exp2(style.exposure); let l=dot(c,vec3(0.2126,0.7152,0.0722)); c=mix(vec3(l),c,style.saturation); c=(c-0.5)*style.contrast+0.5; if(style.tone_map==1u){c=aces(c);} c=pow(max(c,vec3(0.0)),vec3(1.0/2.2)); c=mix(c,style.outline_color.rgb,edge*style.outline_color.a); return vec4(c,1.0); }") )
+ c=max(c,vec3(0.0)); c*=exp2(style.exposure); let l=dot(c,vec3(0.2126,0.7152,0.0722)); c=mix(vec3(l),c,style.saturation); c=(c-0.5)*style.contrast+0.5; c=max(c,vec3(0.0)); if(style.tone_map==1u){c=aces(c);} c=pow(max(c,vec3(0.0)),vec3(1.0/2.2)); c=mix(c,style.outline_color.rgb,edge*style.outline_color.a); return vec4(c,1.0); }") )
 
 ;; --- the render graph, as EDN data -------------------------------------------
 

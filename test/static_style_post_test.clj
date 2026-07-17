@@ -36,6 +36,8 @@
                  "style.outline_width_px" "style.depth_threshold"
                  "style.normal_threshold" "style.saturation" "style.contrast"
                  "style.exposure" "style.tone_map" ":depth-load? true"
+                 "c=max(c,vec3(0.0)); c*=exp2(style.exposure)"
+                 "c=(c-0.5)*style.contrast+0.5; c=max(c,vec3(0.0))"
                  ":pass-executed? false" "swap! assoc :pass-executed? style-pass? :submitted? true"
                  ":depth-sampled? true" ":normal-sampled? true"]]
     (is (str/includes? source token) token)))
