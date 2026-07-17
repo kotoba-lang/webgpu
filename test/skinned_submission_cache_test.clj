@@ -1,0 +1,29 @@
+(ns skinned-submission-cache-test
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is run-tests]]))
+
+(deftest cached-overlay-contract-shares-palette-and-reuses-resources
+  (let [source (slurp (io/file "src/kami/webgpu/mesh.cljs"))]
+    (is (str/includes? source "(defn create-skinned-submission-cache"))
+    (is (str/includes? source "(defn prepare-skinned-submission-packets!"))
+    (is (str/includes? source "(defn encode-skinned-overlay-cached!"))
+    (is (str/includes? source ":joint-palette-uploads"))
+    (is (str/includes? source ":joint-upload-reduction"))
+    (is (str/includes? source ":bind-groups-created"))
+    (is (str/includes? source ":bind-groups-reused"))
+    (is (str/includes? source ":provenance-preserved?"))
+    (is (str/includes? source "one entity has conflicting joint palettes"))
+    (is (str/includes? source "cached skinned draws require :entity-id provenance"))))
+
+(deftest draw-path-accepts-preallocated-packet-state-without-stale-matrix-cache
+  (let [source (slurp (io/file "src/kami/webgpu/mesh.cljs"))]
+    (is (str/includes? source "submission-gdata submission-joint-buffer submission-bind"))
+    (is (str/includes? source "(or submission-gdata (js/Float32Array. 60))"))
+    (is (str/includes? source "(nil? submission-joint-buffer)"))
+    (is (str/includes? source "(fill-joint-data! (:data state) palette joint-count)"))
+    (is (str/includes? source "(w3/write-buffer! (w3/device-queue device) (:buffer state) (:data state))"))))
+
+(let [{:keys [fail error]} (run-tests 'skinned-submission-cache-test)]
+  (when (pos? (+ fail error))
+    (throw (ex-info "skinned submission cache gate failed" {:fail fail :error error}))))
