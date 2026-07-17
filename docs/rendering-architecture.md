@@ -21,6 +21,16 @@ depth uses the existing model matrix z-scale and does not change the 28-float in
 | `kami.sprite-gpu` | 2D as GPU instanced quads — sprite primitives (circle/ellipse/rect/arc) → quad instances + a 2D-SDF shader. Replaces Canvas2D. |
 | `kami.webgpu` | the WebGPU runtime (CLJS → browser WebGPU API). |
 | `kami.webgl` | the WebGL2 runtime (fallback). `pick-backend` selects WebGPU when `navigator.gpu` exists, else WebGL2. 2D sprite pass + 3D lit/shadow pass (depth-FBO shadow map). |
+
+When WebGPU reports a fallback adapter, exposes a known software identity (SwiftShader,
+llvmpipe/lavapipe, WARP), or is explicitly requested with `forceFallbackAdapter`, the
+executor uses the `:solid-albedo` material-texture compatibility policy. It retains texture-array
+shape, layers, normal/MR maps, and material/vertex colours, but substitutes neutral
+white albedo texels to avoid SwiftShader corruption of heterogeneous sRGB array
+samples. Hardware adapters remain on `:generated`. `backend-evidence` reports the
+effective `:material-texture-policy` plus normalized adapter identity and selection
+reason; callers may explicitly override it with
+`:fallback-material-texture-policy` for diagnostics.
 | `kami.playwright` | browser tests in CLJ — `eval-page` drives a headless WebGL2 Chromium and returns EDN. |
 
 ## Shader language: one EDN → WGSL + GLSL
