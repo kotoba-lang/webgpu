@@ -15,6 +15,7 @@
   (:require [clojure.walk :as walk]
             [kami.webgpu.ir :as ir]
             [kami.webgpu.quality :as quality]
+            [kami.webgpu.render-style :as render-style]
             [kotoba.webgl :as webgl]
             [kotoba.render.environment :as render-environment]
             [kotoba.render.atmosphere :as render-atmosphere]
@@ -134,6 +135,42 @@
 ;; the depth-only shadow pass — also generated from data (kami.shaders/shadow-shader).
 (def SHADOW-WGSL (shaders/cascaded-foliage-shadow-shader 0))
 
+(def ^:private NORMAL-WGSL
+  "struct G { vp: mat4x4<f32>, sun_dir: vec4<f32>, sun_col: vec4<f32>, sky: vec4<f32>, light_vp0: mat4x4<f32>, light_vp1: mat4x4<f32>, light_vp2: mat4x4<f32>, light_vp3: mat4x4<f32>, shadow_splits: vec4<f32>, light_a: vec4<f32>, light_b: vec4<f32>, light_c: vec4<f32>, light_d: vec4<f32>, wind: vec4<f32> };
+@group(0) @binding(0) var<uniform> g: G;
+struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32> };
+@vertex fn vs(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) m0: vec4<f32>, @location(3) m1: vec4<f32>, @location(4) m2: vec4<f32>, @location(5) m3: vec4<f32>, @location(6) color: vec4<f32>, @location(7) material: vec4<f32>, @location(8) uv: vec2<f32>, @location(9) tangent: vec4<f32>, @location(10) uvTransform: vec4<f32>, @location(11) biomeWeights: vec3<f32>, @location(12) biomeLayerIndices: vec3<f32>, @location(13) foliage: vec4<f32>) -> VO {
+  let model = mat4x4<f32>(m0,m1,m2,m3);
+  var world = model * vec4<f32>(pos,1.0);
+  let windWeight = clamp(1.0-uv.y,0.0,1.0);
+  let windAmount = foliage.y*windWeight*windWeight*sin(g.wind.z*g.wind.w*foliage.w+foliage.z);
+  world.x += g.wind.x*windAmount; world.z += g.wind.y*windAmount;
+  var o: VO; o.clip=g.vp*world;
+  o.n=normalize((m0.xyz*normal.x)/max(dot(m0.xyz,m0.xyz),1e-6)+(m1.xyz*normal.y)/max(dot(m1.xyz,m1.xyz),1e-6)+(m2.xyz*normal.z)/max(dot(m2.xyz,m2.xyz),1e-6)); return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4<f32> { return vec4<f32>(normalize(i.n)*0.5+0.5,1.0); }")
+
+(defn- style-post-wgsl [bloom? ao?]
+  (str "struct Style { inv_resolution: vec2<f32>, outline_width_px: f32, depth_threshold: f32, normal_threshold: f32, saturation: f32, contrast: f32, exposure: f32, outline_color: vec4<f32>, outline_enabled: u32, tone_map: u32, _pad: vec2<f32> };
+@group(0) @binding(0) var scene_color: texture_2d<f32>;
+@group(0) @binding(1) var scene_depth: texture_depth_2d;
+@group(0) @binding(2) var scene_normal: texture_2d<f32>;
+@group(0) @binding(3) var linear_sampler: sampler;
+@group(0) @binding(4) var<uniform> style: Style;\n"
+       (when bloom? "@group(0) @binding(5) var bloom_tex: texture_2d<f32>;\n")
+       (when ao? (str "@group(0) @binding(" (if bloom? 6 5) ") var ao_tex: texture_2d<f32>;\n"))
+       "struct O { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs(@builtin(vertex_index) i:u32)->O { var ps=array<vec2<f32>,3>(vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0)); var o:O; o.p=vec4(ps[i],0.0,1.0); o.uv=ps[i]*vec2(0.5,-0.5)+0.5; return o; }
+fn aces(c:vec3<f32>)->vec3<f32>{ return clamp((c*(2.51*c+vec3(0.03)))/(c*(2.43*c+vec3(0.59))+vec3(0.14)),vec3(0.0),vec3(1.0)); }
+fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(scene_normal,clamp(p,vec2(0),dims-1),0).xyz*2.0-1.0); }
+@fragment fn fs(i:O)->@location(0) vec4<f32>{
+ let dims=vec2<i32>(textureDimensions(scene_depth)); let p=clamp(vec2<i32>(i.uv*vec2<f32>(dims)),vec2(0),dims-1);
+ var c=textureSample(scene_color,linear_sampler,i.uv).rgb;"
+       (when bloom? " c+=textureSample(bloom_tex,linear_sampler,i.uv).rgb*0.12;")
+       (when ao? " c*=mix(1.0,textureSample(ao_tex,linear_sampler,i.uv).r,0.58);")
+       " var edge=0.0; if(style.outline_enabled==1u){ let centerD=textureLoad(scene_depth,p,0); let centerN=nload(p,dims); let radius=max(1,i32(round(style.outline_width_px))); for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){if(x!=0||y!=0){let q=clamp(p+vec2<i32>(x,y)*radius,vec2(0),dims-1); let de=abs(textureLoad(scene_depth,q,0)-centerD)/max(style.depth_threshold,1e-6); let ne=(1.0-dot(centerN,nload(q,dims)))/max(style.normal_threshold,1e-6); edge=max(edge,clamp(max(de,ne),0.0,1.0));}}}}
+ c*=exp2(style.exposure); let l=dot(c,vec3(0.2126,0.7152,0.0722)); c=mix(vec3(l),c,style.saturation); c=(c-0.5)*style.contrast+0.5; if(style.tone_map==1u){c=aces(c);} c=pow(max(c,vec3(0.0)),vec3(1.0/2.2)); c=mix(c,style.outline_color.rgb,edge*style.outline_color.a); return vec4(c,1.0); }") )
+
 ;; --- the render graph, as EDN data -------------------------------------------
 
 (def ^:private HDR-FORMAT
@@ -196,8 +233,9 @@
                :atmosphere (shaders/atmosphere-cloud-shader)
                :ssao (shaders/ssao-shader)
                :bloom (shaders/bloom-shader)
-               :composite (shaders/hdr-composite-shader)
-               :ao-composite (shaders/hdr-ao-composite-shader)
+               :normal NORMAL-WGSL
+               :composite (style-post-wgsl true true)
+               :ao-composite (style-post-wgsl false true)
                :depth0 (shaders/cascaded-foliage-shadow-shader 0)
                :depth1 (shaders/cascaded-foliage-shadow-shader 1)
                :depth2 (shaders/cascaded-foliage-shadow-shader 2)
@@ -207,6 +245,7 @@
                ;; linear resolution, extract bloom at quarter resolution, then
                ;; composite/ACES into the full-resolution swapchain.
                :hdr {:color HDR-FORMAT :scale 0.5}
+               :scene-normal {:color "rgba8unorm" :scale 0.5}
                :ssao {:color "r8unorm" :scale 0.5}
                :bloom {:color HDR-FORMAT :scale 0.25}}
    :samplers  {:comparison {:compare "less-equal" :magFilter "linear" :minFilter "linear"}
@@ -252,17 +291,24 @@
                        :binds [{:texture :hdr} {:sampler :linear}]}
                :ssao {:shader :ssao :fullscreen true :color "r8unorm"
                       :binds [{:texture :screen-depth} :ssao-uniform]}
+               :normal {:shader :normal :cull "back" :color "rgba8unorm"
+                        :depth {:format "depth24plus" :write false :compare "less-equal"}
+                        :binds [:uniform]}
                :composite {:shader :composite :fullscreen true :color :screen
-                           :binds [{:texture :hdr} {:texture :bloom}
-                                   {:texture :ssao} {:sampler :linear}]}
+                           :binds [{:texture :hdr} {:texture :screen-depth}
+                                   {:texture :scene-normal} {:sampler :linear} :style-uniform
+                                   {:texture :bloom} {:texture :ssao}]}
                :ao-composite {:shader :ao-composite :fullscreen true :color :screen
-                              :binds [{:texture :hdr} {:texture :ssao} {:sampler :linear}]}}
+                              :binds [{:texture :hdr} {:texture :screen-depth}
+                                      {:texture :scene-normal} {:sampler :linear} :style-uniform
+                                      {:texture :ssao}]}}
    :passes    [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
                {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
                {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
                {:pipeline :shadow3 :depth :shadow :cascade 3 :clear-depth 1.0}
                {:pipeline :atmosphere :color :hdr :clear [0 0 0]}
                {:pipeline :main :color :hdr :depth :screen-depth :load? true}
+               {:pipeline :normal :color :scene-normal :depth :screen-depth :depth-load? true}
                {:pipeline :ssao :color :ssao :clear [1 1 1]}
                {:pipeline :bloom :color :bloom :clear [0 0 0]}
                {:pipeline :composite :color :screen :clear [0 0 0]}]
@@ -273,6 +319,7 @@
                    :passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
                             {:pipeline :atmosphere :color :hdr :clear [0 0 0]}
                             {:pipeline :main :color :hdr :depth :screen-depth :load? true}
+                            {:pipeline :normal :color :scene-normal :depth :screen-depth :depth-load? true}
                             {:pipeline :ssao :color :ssao :clear [1 1 1]}
                             {:pipeline :ao-composite :color :screen :clear [0 0 0]}]}
    :ssao DEFAULT-SSAO})
@@ -347,7 +394,7 @@
    :depthStencilFormat (some-> depth :format)})
 
 (defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
-  [device pipe gbuf atmosphere-buffer ssao-buffer targets samplers binds]
+  [device pipe gbuf atmosphere-buffer ssao-buffer style-buffer targets samplers binds]
   (w3/create-bind-group! device
     #js {:layout (w3/get-bind-group-layout pipe 0)
          :entries (into-array
@@ -357,6 +404,7 @@
                           (= b :uniform) #js {:binding i :resource #js {:buffer gbuf}}
                           (= b :atmosphere-uniform) #js {:binding i :resource #js {:buffer atmosphere-buffer}}
                           (= b :ssao-uniform) #js {:binding i :resource #js {:buffer ssao-buffer}}
+                          (= b :style-uniform) #js {:binding i :resource #js {:buffer style-buffer}}
                           (:texture b)   #js {:binding i :resource (get-in targets [(:texture b) :view])}
                           (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
                       binds))}))
@@ -523,6 +571,7 @@
                    ssao-enabled? (get-in graph [:ssao-tier :enabled?] true)
                    ssao-buffer (when ssao-enabled?
                                  (w3/create-buffer! device #js {:size 48 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))}))
+                   style-buffer (w3/create-buffer! device #js {:size 64 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -587,7 +636,7 @@
                                    (assoc m k {:pipe pipe
                                                :fullscreen (:fullscreen pd)
                                                :bundle-descriptor (render-bundle-descriptor fmt pd)
-                                               :bind (build-bind device pipe gbuf atmosphere-buffer ssao-buffer targets samplers (:binds pd))})))
+                                               :bind (build-bind device pipe gbuf atmosphere-buffer ssao-buffer style-buffer targets samplers (:binds pd))})))
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
@@ -603,7 +652,7 @@
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf
-                :atmosphere-buffer atmosphere-buffer :ssao-buffer ssao-buffer :idx-count (:idx-count box)
+                :atmosphere-buffer atmosphere-buffer :ssao-buffer ssao-buffer :style-buffer style-buffer :idx-count (:idx-count box)
                 :geos geos
                 :targets targets :pipelines pipelines :graph graph
                 :material-textures (into {}
@@ -621,6 +670,7 @@
                 :quality-resolution quality-resolution
                 :density-evidence (atom nil)
                 :post-evidence (atom nil)
+                :style-post-evidence (atom nil)
                 :ssao-evidence (atom nil)
                 :atmosphere-evidence (atom nil)
                 :foliage-evidence (atom nil)
@@ -770,9 +820,9 @@
    The GPU instance buffer itself grows (doubling) to fit however many
    instances the scene actually has — see [[ensure-inst-buffer!]] — rather
    than silently dropping any past a fixed cap (ADR-2607100100 M6)."
-  [{:keys [device queue ctx fmt w h vbuf ibuf inst-buffer gbuf atmosphere-buffer ssao-buffer idx-count targets pipelines graph
+  [{:keys [device queue ctx fmt w h vbuf ibuf inst-buffer gbuf atmosphere-buffer ssao-buffer style-buffer idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
-           atmosphere-evidence ssao-evidence frame-evidence foliage-evidence world-overlay
+           atmosphere-evidence ssao-evidence style-post-evidence frame-evidence foliage-evidence world-overlay
            render-bundle-cache]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
@@ -814,6 +864,11 @@
             (some-> instance-cache (reset! fresh))
             fresh))
         g (:globals ir)
+        authored-style (:render-style g)
+        resolved-style (render-style/static-post-style authored-style)
+        style-uniforms (render-style/static-post-uniforms authored-style
+                                                          (get-in targets [:screen-depth :width] w)
+                                                          (get-in targets [:screen-depth :height] h))
         sky (:sky g)
         horizon (arr3 sky :horizon [0.7 0.8 0.9])
         sun-dir (arr3 sky :sun-dir [-0.4 -0.85 -0.35])
@@ -897,6 +952,24 @@
     (w3/write-buffer! queue gbuf 0 gf)
     (w3/write-buffer! queue atmosphere-buffer 0
                       (js/Float32Array. (clj->js (render-atmosphere/uniform-values atmosphere))))
+    (let [sf (js/Float32Array. (clj->js (:floats style-uniforms)))
+          su (js/Uint32Array. (.-buffer sf))]
+      (aset su 12 (:outline-enabled style-uniforms))
+      (aset su 13 (:tone-map style-uniforms))
+      (w3/write-buffer! queue style-buffer 0 sf))
+    (some-> style-post-evidence
+            (reset! {:schema :kotoba.webgpu/style-post-evidence-v1
+                     :contract :kotoba.render/style-v1
+                     :requested authored-style
+                     :applied resolved-style
+                     :normal-space :world
+                     :normal-encoding :unit-times-half-plus-half
+                     :depth-range [0.0 1.0]
+                     :resolution [(get-in targets [:screen-depth :width] w)
+                                  (get-in targets [:screen-depth :height] h)]
+                     :pass-executed? false
+                     :depth-sampled? true
+                     :normal-sampled? true}))
     (when ssao-buffer
       (w3/write-buffer! queue ssao-buffer 0
                         (js/Float32Array.
@@ -969,7 +1042,7 @@
                              {:signature signature :bundle bundle})
                       bundle))))))]
       ;; run the graph's passes in order (EDN-driven)
-      (doseq [{:keys [pipeline color depth clear clear-depth cascade draw load?]} frame-passes]
+      (doseq [{:keys [pipeline color depth clear clear-depth cascade draw load? depth-load?]} frame-passes]
         (let [{:keys [pipe bind fullscreen bundle-descriptor]} (get pipelines pipeline)
               catts (if color
                       (let [c (if (= clear :sky) horizon (or clear [0 0 0]))]
@@ -979,7 +1052,7 @@
               pass-desc #js {:colorAttachments catts}
               _ (when depth
                   (set! (.-depthStencilAttachment pass-desc)
-                        #js {:view (vw depth cascade) :depthLoadOp "clear"
+                        #js {:view (vw depth cascade) :depthLoadOp (if depth-load? "load" "clear")
                              :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}))
               rp (w3/begin-render-pass! enc pass-desc)]
           (when (not= false draw)
@@ -993,7 +1066,7 @@
           (w3/end-pass! rp)
           ;; Arbitrary/skinned meshes join the graph after the world geometry
           ;; pass and before post-processing, on the exact same HDR/depth views.
-          (when (and (not fullscreen) color depth
+          (when (and (contains? #{:main :main-direct} pipeline) color depth
                      (contains? #{:screen-depth :direct-depth} depth))
             (when-let [encode! (some-> world-overlay deref)]
               (encode! enc {:color-view (vw color nil)
@@ -1002,6 +1075,7 @@
                                             fmt
                                             (get-in targets [color :format]))})))))
       (w3/submit! queue [(w3/finish! enc)])
+      (some-> style-post-evidence (swap! assoc :pass-executed? true :submitted? true))
       (some-> frame-evidence
               (swap! (fn [e]
                        (-> e
@@ -1022,6 +1096,11 @@
   "Last adaptive post-processing decision for profiling/Studio diagnostics."
   [ctx]
   (some-> ctx :post-evidence deref))
+
+(defn style-post-evidence
+  "Last style-v1 post-process actually encoded by the static WebGPU executor."
+  [ctx]
+  (some-> ctx :style-post-evidence deref))
 
 (defn atmosphere-evidence
   "Last normalized atmosphere/cloud contract submitted to the GPU."

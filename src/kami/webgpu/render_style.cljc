@@ -36,6 +36,8 @@
 
 (def default-render-profile default-photoreal-profile)
 
+(declare scene-style->profile finite-number? unit-number? color3?)
+
 (def mesh-render-capabilities
   "Capabilities actually executed by kami.webgpu.mesh.  Keep this honest: the
    static/instanced kami.webgpu executor has a separate pipeline graph."
@@ -44,7 +46,43 @@
    :outline-modes #{:none}
    :color-grading? false})
 
-(declare finite-number? unit-number? color3?)
+(def static-render-capabilities
+  {:profiles supported-render-styles
+   :outline-modes #{:none :screen-space}
+   :outline-inputs #{:depth :normal}
+   :normal-space :world
+   :color-grading? true
+   :tone-maps #{:aces :none}})
+
+(defn static-post-style
+  "Validate and normalize style-v1 globals for the static post-process executor."
+  [m]
+  (let [m (or m default-scene-style)
+        _ (scene-style->profile m)
+        outline (merge (:outline default-scene-style) (:outline m))
+        grading (merge (:color-grading default-scene-style) (:color-grading m))
+        tone-map (or (:tone-map grading) :aces)]
+    (when-not (contains? (:tone-maps static-render-capabilities) tone-map)
+      (throw (ex-info "unsupported tone map" {:tone-map tone-map})))
+    {:profile (:profile m)
+     :outline outline
+     :color-grading (assoc grading :tone-map tone-map)}))
+
+(defn static-post-uniforms
+  "64-byte style_postfx ABI as 16 ordered f32 lanes. Integer flags are written
+   through the u32 view by the executor at lanes 12 and 13."
+  [m width height]
+  (let [{:keys [outline color-grading]} (static-post-style m)
+        enabled? (= :screen-space (:mode outline))]
+    {:floats [(/ 1.0 (max 1 width)) (/ 1.0 (max 1 height))
+              (:width-px outline) (:depth-threshold outline)
+              (:normal-threshold outline) (:saturation color-grading)
+              (:contrast color-grading) (:exposure color-grading)
+              (nth (:color outline) 0) (nth (:color outline) 1)
+              (nth (:color outline) 2) 1.0
+              0.0 0.0 0.0 0.0]
+     :outline-enabled (if enabled? 1 0)
+     :tone-map (if (= :aces (:tone-map color-grading)) 1 0)}))
 
 (defn scene-style->profile
   "Lower the canonical scene/render-IR style-v1 envelope to material shader data.
