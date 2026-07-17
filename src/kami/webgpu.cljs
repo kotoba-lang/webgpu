@@ -13,8 +13,8 @@
    is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
    The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform)."
   (:require [kami.webgpu.ir :as ir]
-            [kami.webgl :as webgl]
-            [kami.shaders :as shaders]
+            [kotoba.webgl :as webgl]
+            [kotoba.shaders :as shaders]
             [w3.webgpu :as w3]))
 
 ;; --- column-major mat4 (WebGPU/wgpu convention) ------------------------------
