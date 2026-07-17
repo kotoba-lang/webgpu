@@ -31,6 +31,8 @@
 (deftest static-graph-physically-consumes-style-inputs
   (doseq [token [":scene-normal {:color \"rgba8unorm\"" ":style-uniform"
                  "textureLoad(scene_depth" "textureLoad(scene_normal"
+                 "centerD<0.9999" "centerValid && nvalid(sampleRaw)"
+                 "fn nvalid" "var ne=0.0"
                  "style.outline_width_px" "style.depth_threshold"
                  "style.normal_threshold" "style.saturation" "style.contrast"
                  "style.exposure" "style.tone_map" ":depth-load? true"

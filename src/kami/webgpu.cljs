@@ -162,13 +162,15 @@ struct VO { @builtin(position) clip: vec4<f32>, @location(0) n: vec3<f32> };
        "struct O { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs(@builtin(vertex_index) i:u32)->O { var ps=array<vec2<f32>,3>(vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0)); var o:O; o.p=vec4(ps[i],0.0,1.0); o.uv=ps[i]*vec2(0.5,-0.5)+0.5; return o; }
 fn aces(c:vec3<f32>)->vec3<f32>{ return clamp((c*(2.51*c+vec3(0.03)))/(c*(2.43*c+vec3(0.59))+vec3(0.14)),vec3(0.0),vec3(1.0)); }
-fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(scene_normal,clamp(p,vec2(0),dims-1),0).xyz*2.0-1.0); }
+fn nraw(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return textureLoad(scene_normal,clamp(p,vec2(0),dims-1),0).xyz; }
+fn nvalid(v:vec3<f32>)->bool{ return dot(v,v)>0.0001; }
+fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
 @fragment fn fs(i:O)->@location(0) vec4<f32>{
  let dims=vec2<i32>(textureDimensions(scene_depth)); let p=clamp(vec2<i32>(i.uv*vec2<f32>(dims)),vec2(0),dims-1);
  var c=textureSample(scene_color,linear_sampler,i.uv).rgb;"
        (when bloom? " c+=textureSample(bloom_tex,linear_sampler,i.uv).rgb*0.12;")
        (when ao? " c*=mix(1.0,textureSample(ao_tex,linear_sampler,i.uv).r,0.58);")
-       " var edge=0.0; if(style.outline_enabled==1u){ let centerD=textureLoad(scene_depth,p,0); let centerN=nload(p,dims); let radius=max(1,i32(round(style.outline_width_px))); for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){if(x!=0||y!=0){let q=clamp(p+vec2<i32>(x,y)*radius,vec2(0),dims-1); let de=abs(textureLoad(scene_depth,q,0)-centerD)/max(style.depth_threshold,1e-6); let ne=(1.0-dot(centerN,nload(q,dims)))/max(style.normal_threshold,1e-6); edge=max(edge,clamp(max(de,ne),0.0,1.0));}}}}
+       " var edge=0.0; let centerD=textureLoad(scene_depth,p,0); if(style.outline_enabled==1u && centerD<0.9999){ let centerRaw=nraw(p,dims); let centerValid=nvalid(centerRaw); let centerN=ndecode(centerRaw); let radius=max(1,i32(round(style.outline_width_px))); for(var y=-1;y<=1;y++){for(var x=-1;x<=1;x++){if(x!=0||y!=0){let q=clamp(p+vec2<i32>(x,y)*radius,vec2(0),dims-1); let de=abs(textureLoad(scene_depth,q,0)-centerD)/max(style.depth_threshold,1e-6); let sampleRaw=nraw(q,dims); var ne=0.0; if(centerValid && nvalid(sampleRaw)){ne=(1.0-dot(centerN,ndecode(sampleRaw)))/max(style.normal_threshold,1e-6);} edge=max(edge,clamp(max(de,ne),0.0,1.0));}}}}
  c*=exp2(style.exposure); let l=dot(c,vec3(0.2126,0.7152,0.0722)); c=mix(vec3(l),c,style.saturation); c=(c-0.5)*style.contrast+0.5; if(style.tone_map==1u){c=aces(c);} c=pow(max(c,vec3(0.0)),vec3(1.0/2.2)); c=mix(c,style.outline_color.rgb,edge*style.outline_color.a); return vec4(c,1.0); }") )
 
 ;; --- the render graph, as EDN data -------------------------------------------
