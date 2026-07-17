@@ -93,6 +93,7 @@
    `upload-texture!` returns a Promise of a GPUTexture; callers `.then`
    before passing it to `draw!`."
   (:require [clojure.string :as str]
+            [kami.webgpu.render-style :as render-style]
             [kotoba.webgl :as webgl]
             [w3.webgpu :as w3]))
 
@@ -199,6 +200,10 @@
   _pad2: u32,
   material_params: vec4<f32>,
   uv_transform: vec4<f32>,
+  shade_color: vec4<f32>,
+  rim_color: vec4<f32>,
+  stylized_params: vec4<f32>,
+  highlight_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -295,7 +300,6 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   let light_dir = normalize(vec3<f32>(0.4, 0.8, 0.5));
   let n = normalize(in.n);
   let ndl = max(dot(n, light_dir), 0.0);
-  let lit = toon_lit(ndl);
   let t = pattern_t(in.local_pos);
   let base_color = mix(u.color.rgb, u.color_b.rgb, t);
   let tex_sample = textureSample(tex, samp, in.uv);
@@ -305,6 +309,22 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   let half_dir = normalize(light_dir + vec3<f32>(0.0, 0.0, 1.0));
   let specular = pow(max(dot(n, half_dir), 0.0), mix(128.0, 2.0, roughness)) * ndl;
   let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+  if (u.shade_kind == 1u) {
+    let smooth_w = max(u.toon_smooth, 1e-4);
+    let shade_edge = smoothstep(u.toon_threshold - smooth_w, u.toon_threshold + smooth_w, ndl);
+    let diffuse = mix(albedo * u.shade_color.rgb, albedo, shade_edge);
+    let rim_base = clamp(1.0 - max(dot(n, vec3<f32>(0.0, 0.0, 1.0)), 0.0) + u.stylized_params.z, 0.0, 1.0);
+    let rim = pow(rim_base, max(u.stylized_params.y, 1e-4)) * u.stylized_params.x;
+    let bands = max(u.stylized_params.w, 1.0);
+    let spec_edge = smoothstep(u.highlight_params.y - max(u.highlight_params.w, 1e-4),
+                               u.highlight_params.y + max(u.highlight_params.w, 1e-4), specular);
+    let quantized_spec = floor(spec_edge * bands + 0.5) / bands;
+    return vec4<f32>(diffuse * (1.0 - metallic * 0.45)
+                     + u.rim_color.rgb * rim
+                     + f0 * quantized_spec * u.highlight_params.x, 1.0);
+  }
+  let ambient = 0.35;
+  let lit = ambient + ndl * (1.0 - ambient);
   return vec4<f32>(albedo * lit * (1.0 - metallic * 0.45) + f0 * specular, 1.0);
 }
 ")
@@ -417,10 +437,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
           joint-count (if has-skin? (inc (apply max 0 (mapcat identity joints))) 0)
           joint-matrices-buf (w3/create-buffer! device #js {:size (max 64 (* 64 (max 1 joint-count)))
                                                          :usage (bit-or (w3/buffer-usage :storage) (w3/buffer-usage :copy-dst))})
-          ;; 176 bytes: existing uniforms + material params + UV transform.
+          ;; 240 bytes: historical 176-byte contract plus four aligned stylized vec4s.
           ;; pattern_kind(16) + pattern_params(16) + shade_kind/toon_threshold/
           ;; toon_smooth/_pad2(16) — see `draw!`'s `gdata`.
-          gbuf (w3/create-buffer! device #js {:size 176 :usage (bit-or (w3/buffer-usage :uniform)
+          gbuf (w3/create-buffer! device #js {:size 240 :usage (bit-or (w3/buffer-usage :uniform)
                                                                        (w3/buffer-usage :copy-dst))})]
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
@@ -446,7 +466,11 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     draws exactly as before texture support existed).
   - `:shade-kind` (0|1)/`:toon-threshold`/`:toon-smooth` — 2-tone toon
     shading (see the shader's `toon_lit` doc comment). `:shade-kind`
-    defaults `0` (the original continuous N.L lighting).
+    defaults `0` (the original continuous N.L lighting). Prefer the stable
+    `:render-style` (`:photoreal`, `:stylized`, or the complete style-v1
+    envelope) plus optional stylized profile fields; legacy `:shade-kind`
+    remains supported. A canonical screen-space outline request fails closed:
+    this mesh pipeline does not yet own an outline pass.
   Omitting `opts` entirely (every pre-`/loop`-maturity-pass call site) draws
   byte-identically to before any of this."
   ([ctx pass buffers mvp color morph-weights joint-matrices]
@@ -455,16 +479,45 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     {:keys [vbuf ibuf idx-count vertex-count morph-count morph-deltas-buf morph-weights-buf
             joint-count joint-matrices-buf gbuf]}
     mvp color morph-weights joint-matrices
-    {:keys [color-b kind params texture sampler shade-kind toon-threshold toon-smooth metallic roughness
-            uv-offset uv-scale]
+    {:keys [color-b kind params texture sampler render-style shade-kind toon-threshold toon-smooth
+            shade-color rim-color rim-intensity rim-power rim-lift specular-bands specular-threshold
+            specular-smooth highlight-intensity metallic roughness uv-offset uv-scale]
      :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]
-          shade-kind 0 toon-threshold 0.4 toon-smooth 0.08 metallic 0.0 roughness 0.5
+          metallic 0.0 roughness 0.5
           uv-offset [0.0 0.0] uv-scale [1.0 1.0]}}]
-   (let [q (w3/device-queue device)
-         ;; 176 bytes / 4 = 44 floats: mvp(16) + color(4) + color_b(4) +
+   (let [profile-input (cond-> (cond
+                                  (map? render-style) render-style
+                                  (keyword? render-style) {:render-style render-style}
+                                  :else {})
+                         (some? toon-threshold) (assoc :toon-threshold toon-threshold)
+                         (some? toon-smooth) (assoc :toon-smooth toon-smooth)
+                         shade-color (assoc :shade-color shade-color)
+                         rim-color (assoc :rim-color rim-color)
+                         (some? rim-intensity) (assoc :rim-intensity rim-intensity)
+                         (some? rim-power) (assoc :rim-power rim-power)
+                         (some? rim-lift) (assoc :rim-lift rim-lift)
+                         (some? specular-bands) (assoc :specular-bands specular-bands)
+                         (some? specular-threshold) (assoc :specular-threshold specular-threshold)
+                         (some? specular-smooth) (assoc :specular-smooth specular-smooth)
+                         (some? highlight-intensity) (assoc :highlight-intensity highlight-intensity))
+         style-uniforms (render-style/shader-uniforms profile-input)
+         shade-kind (if (some? render-style) (:shade-kind style-uniforms) (or shade-kind 0))
+         toon-threshold (or toon-threshold (:toon-threshold style-uniforms) 0.4)
+         toon-smooth (or toon-smooth (:toon-smooth style-uniforms) 0.08)
+         shade-color (or shade-color (:shade-color style-uniforms) [0.35 0.35 0.38])
+         rim-color (or rim-color (:rim-color style-uniforms) [1.0 1.0 1.0])
+         rim-intensity (or rim-intensity (:rim-intensity style-uniforms) 0.25)
+         rim-power (or rim-power (:rim-power style-uniforms) 3.0)
+         rim-lift (or rim-lift (:rim-lift style-uniforms) 0.0)
+         specular-bands (or specular-bands (:specular-bands style-uniforms) 3)
+         specular-threshold (or specular-threshold (:specular-threshold style-uniforms) 0.45)
+         specular-smooth (or specular-smooth (:specular-smooth style-uniforms) 0.04)
+         highlight-intensity (or highlight-intensity (:highlight-intensity style-uniforms) 0.35)
+         q (w3/device-queue device)
+         ;; 240 bytes / 4 = 60 floats: historical 44 plus four stylized vec4s.
          ;; counts+kind(4, u32 view) + params(4) + shade_kind/toon_threshold/
          ;; toon_smooth/_pad2(4, mixed u32/f32 view) + material(4) + uv_transform(4).
-         gdata (js/Float32Array. 44)]
+         gdata (js/Float32Array. 60)]
      (.set gdata mvp 0)
      (.set gdata (f32 (conj (vec color) 1.0)) 16)
      (.set gdata (f32 (conj (vec color-b) 1.0)) 20)
@@ -477,6 +530,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
      (aset gdata 36 metallic)
      (aset gdata 37 roughness)
      (.set gdata (f32 (concat uv-offset uv-scale)) 40)
+     (.set gdata (f32 (conj (vec shade-color) 1.0)) 44)
+     (.set gdata (f32 (conj (vec rim-color) 1.0)) 48)
+     (.set gdata (f32 [rim-intensity rim-power rim-lift specular-bands]) 52)
+     (.set gdata (f32 [highlight-intensity specular-threshold 0.0 specular-smooth]) 56)
      (w3/write-buffer! q gbuf gdata)
     (when (pos? morph-count)
       (w3/write-buffer! q morph-weights-buf (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
