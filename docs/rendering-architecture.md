@@ -66,3 +66,17 @@ outline or color-grading pass. Consequently `:outline :screen-space` fails
 closed at mesh-uniform lowering instead of producing an unannounced fidelity
 downgrade. `:inverted-hull` is reserved by the contract and rejected during
 profile validation.
+
+The static `kami.webgpu` graph additionally executes style-v1 post-processing.
+It writes a half-resolution `rgba8unorm` world-normal target (unit normal encoded
+as `n * 0.5 + 0.5`) in a depth-loaded geometry prepass, then the final fullscreen
+pass samples HDR scene color, hardware depth `[0,1]`, and that normal target.
+Screen-space outlines use the authored pixel width plus both depth and normal
+thresholds. Color grading applies exposure, saturation, contrast, ACES (or none),
+and the renderer's historical output gamma. The core bindings and 64-byte uniform
+layout match `style_postfx.wgsl`; optional AO/bloom textures occupy bindings above
+the five-binding core ABI.
+
+`style-post-evidence` reports requested and applied data, normal space/encoding,
+resolution, resource sampling, and changes `:pass-executed?` to true only after
+the command buffer containing the pass has been submitted.
