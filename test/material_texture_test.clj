@@ -41,6 +41,17 @@
     (is (str/includes? source ":brdf-lut"))
     (is (str/includes? source ":maxAnisotropy 8"))))
 
+(deftest fallback-adapter-uses-explicit-solid-albedo-compatibility-policy
+  (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
+    (is (str/includes? source "(when (:software-adapter? adapter-info) :solid-albedo)"))
+    (is (str/includes? source ":adapter-reported-fallback"))
+    (is (str/includes? source ":software-identity"))
+    (is (str/includes? source "swiftshader|software|llvmpipe|lavapipe"))
+    (is (str/includes? source "(mapv solid-albedo-descriptor)"))
+    (is (str/includes? source ":material-texture-policy texture-policy"))
+    (is (str/includes? source ":adapter (:adapter-evidence ctx)"))
+    (is (str/includes? source ":material-texture-policy (:material-texture-policy ctx)"))))
+
 (deftest foliage-host-wires-cutout-wind-and-depth-fragments
   (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
     (is (str/includes? source "render-foliage/gpu-instance"))

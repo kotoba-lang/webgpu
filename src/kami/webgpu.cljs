@@ -12,7 +12,8 @@
    The heavy rasterization is the GPU's; CLJS only records light per-frame commands. This
    is the web execution of the same EDN a native Rust/wgpu executor interprets (ADR-0001).
    The render-IR shape + pure constructors live in kami.webgpu.ir (.cljc, cross-platform)."
-  (:require [clojure.walk :as walk]
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [kami.webgpu.ir :as ir]
             [kami.webgpu.quality :as quality]
             [kami.webgpu.render-style :as render-style]
@@ -452,6 +453,42 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
      :format format :width array-width :height array-height :layer-count layer-count
      :mip-level-count mip-level-count}))
 
+(def ^:private software-adapter-pattern
+  #"(?i)(swiftshader|software|llvmpipe|lavapipe|microsoft basic render|\bwarp\b)")
+
+(defn- adapter-evidence [adapter opts]
+  (let [info (.-info adapter)
+        identity {:vendor (some-> info .-vendor)
+                  :architecture (some-> info .-architecture)
+                  :device (some-> info .-device)
+                  :description (some-> info .-description)}
+        identity-text (str/join " " (keep val identity))
+        requested? (boolean (some-> opts :adapter-options
+                                    (aget "forceFallbackAdapter")))
+        reported? (boolean (or (some-> info .-isFallbackAdapter)
+                               (.-isFallbackAdapter adapter)))
+        identity? (boolean (re-find software-adapter-pattern identity-text))
+        reason (cond requested? :force-fallback-requested
+                     reported? :adapter-reported-fallback
+                     identity? :software-identity
+                     :else nil)]
+    (assoc identity :is-fallback-adapter reported?
+                    :software-adapter? (boolean reason)
+                    :software-reason reason)))
+
+(defn- solid-albedo-descriptor
+  "Preserve texture-array shape and layer addressing while replacing procedural
+   albedo texels with neutral white. SwiftShader currently corrupts heterogeneous
+   rgba8-sRGB array samples on this path; vertex/material colours remain active."
+  [{:keys [width height] :as descriptor}]
+  (assoc descriptor :data (vec (take (* width height 4)
+                                     (cycle [255 255 255 255])))))
+
+(defn- material-texture-policy [opts adapter-info]
+  (or (:fallback-material-texture-policy opts)
+      (when (:software-adapter? adapter-info) :solid-albedo)
+      :generated))
+
 (defn- upload-rgba8-cube!
   [device queue {:keys [schema color-space levels]}]
   (when-not (= schema :kotoba.render/cube-rgba8-v1)
@@ -526,9 +563,10 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                                        #js {:requiredFeatures #js [HDR-RENDERABLE-FEATURE]})]
                       (-> (w3/request-device! adapter descriptor)
                           (.then (fn [device]
-                                   {:device device :packed-hdr? packed-hdr?})))))))
+                                   {:device device :packed-hdr? packed-hdr?
+                                    :adapter-evidence (adapter-evidence adapter opts)})))))))
          (.then
-           (fn [{:keys [device packed-hdr?]}]
+           (fn [{:keys [device packed-hdr? adapter-evidence]}]
              (let [gpu-errors (atom [])
                    device-loss (atom nil)
                    frame-evidence (atom {:draw-attempts 0 :submits 0})
@@ -618,6 +656,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                    direct-depth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
                    targets (assoc targets :direct-depth {:view (w3/create-view direct-depth)
                                                          :width w :height h :format "depth24plus"})
+                   texture-policy (material-texture-policy opts adapter-evidence)
                    texture-library (render-texture/pbr-texture-library
                                     (or (:material-texture-sets opts)
                                         (:material-textures opts)))
@@ -625,7 +664,10 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                    (into {}
                          (for [kind [:albedo :normal :metallic-roughness]]
                            [kind (upload-rgba8-texture-array!
-                                  device q (mapv kind texture-library))]))
+                                  device q (cond->> (mapv kind texture-library)
+                                             (and (= kind :albedo)
+                                                  (= texture-policy :solid-albedo))
+                                             (mapv solid-albedo-descriptor)))]))
                    environment (render-environment/pbr-environment
                                 (or (:environment opts)
                                     render-environment/neutral-pbr-environment))
@@ -653,6 +695,8 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                 :geometry-biomes geometry-biomes
                 :geometry-decals geometry-decals
                 :adapter-options (:adapter-options opts)
+                :adapter-evidence adapter-evidence
+                :material-texture-policy texture-policy
                 :world-color-format (get-in targets [:hdr :format])
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
@@ -1138,6 +1182,8 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
    :packed-hdr-feature? (:packed-hdr-feature? ctx)
    :force-fallback-adapter (boolean (some-> ctx :adapter-options
                                             (aget "forceFallbackAdapter")))
+   :adapter (:adapter-evidence ctx)
+   :material-texture-policy (:material-texture-policy ctx)
    :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
    :device-loss (some-> ctx :device-loss deref)
    :frames (some-> ctx :frame-evidence deref)
