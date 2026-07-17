@@ -667,11 +667,20 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   [viewport draws eye target]
   (let [{:keys [device queue ctx depth mesh-context width height]} viewport
         projection (view-projection eye target (/ width height))
-        prepared (mapv (fn [{:keys [transform] :as draw}]
-                         (assoc draw :mvp (m4-mul projection (model-matrix (or transform {})))))
+        prepared (mapv (fn [{:keys [transform screen-space?] :as draw}]
+                         ;; :screen-space? draws carry clip-space vertices
+                         ;; already (e.g. a full-viewport scene backdrop quad
+                         ;; at far depth) — identity MVP, no camera transform.
+                         (assoc draw :mvp (if screen-space?
+                                            (model-matrix {})
+                                            (m4-mul projection (model-matrix (or transform {}))))))
                        draws)]
     (if (= :webgl2 (:backend viewport))
-      (let [gl (:gl viewport)]
+      ;; The WebGL2 fallback's mesh path has no texture support on this
+      ;; published surface; screen-space (textured backdrop) draws are
+      ;; deliberately dropped there rather than drawn as flat rectangles.
+      (let [gl (:gl viewport)
+            prepared (vec (remove :screen-space? prepared))]
         (doseq [{:keys [buffers joint-matrices]} prepared
                 :when (seq (:joints buffers))]
           (let [{:keys [positions normals joints weights vertex-buffer]} buffers
