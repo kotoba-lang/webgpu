@@ -467,8 +467,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   - `:shade-kind` (0|1)/`:toon-threshold`/`:toon-smooth` — 2-tone toon
     shading (see the shader's `toon_lit` doc comment). `:shade-kind`
     defaults `0` (the original continuous N.L lighting). Prefer the stable
-    `:render-style` (`:photoreal` or `:stylized`) plus optional stylized
-    profile fields; legacy `:shade-kind` remains supported.
+    `:render-style` (`:photoreal`, `:stylized`, or the complete style-v1
+    envelope) plus optional stylized profile fields; legacy `:shade-kind`
+    remains supported. A canonical screen-space outline request fails closed:
+    this mesh pipeline does not yet own an outline pass.
   Omitting `opts` entirely (every pre-`/loop`-maturity-pass call site) draws
   byte-identically to before any of this."
   ([ctx pass buffers mvp color morph-weights joint-matrices]

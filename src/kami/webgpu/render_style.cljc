@@ -36,6 +36,14 @@
 
 (def default-render-profile default-photoreal-profile)
 
+(def mesh-render-capabilities
+  "Capabilities actually executed by kami.webgpu.mesh.  Keep this honest: the
+   static/instanced kami.webgpu executor has a separate pipeline graph."
+  {:profiles supported-render-styles
+   :shading-models #{:pbr :toon-pbr}
+   :outline-modes #{:none}
+   :color-grading? false})
+
 (declare finite-number? unit-number? color3?)
 
 (defn scene-style->profile
@@ -146,8 +154,19 @@
            m)))
 
 (defn shader-uniforms
-  "Lower profile EDN to the mesh shader's portable uniform data contract."
+  "Lower profile EDN to the kami.webgpu.mesh shader uniform contract.
+
+   Fail closed when a canonical envelope requests a pass this backend does not
+   execute. In particular, screen-space outline remains valid style-v1 data but
+   cannot silently disappear in the mesh executor."
   [m]
+  (when (and (= style-contract (:contract m))
+             (not (contains? (:outline-modes mesh-render-capabilities)
+                             (get-in m [:outline :mode] :none))))
+    (throw (ex-info "outline mode is not implemented by kami.webgpu.mesh"
+                    {:requested (get-in m [:outline :mode])
+                     :supported (:outline-modes mesh-render-capabilities)
+                     :backend :kami.webgpu.mesh})))
   (let [p (render-profile m)]
     (if (= :stylized (:render-style p))
       {:shade-kind 1

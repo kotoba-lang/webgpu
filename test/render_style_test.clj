@@ -45,6 +45,32 @@
                  :outline {:mode :inverted-hull :width-px 1.0 :color [0 0 0]
                            :depth-threshold 0.1 :normal-threshold 0.2}}))))
 
+(deftest canonical-material-envelope-reaches-mesh-shader-uniforms
+  (let [envelope {:contract :kotoba.render/style-v1
+                  :profile :stylized
+                  :shading {:model :toon-pbr :bands 5 :threshold 0.52 :smoothness 0.03}
+                  :outline {:mode :none :width-px 0.0 :color [0 0 0]
+                            :depth-threshold 0.1 :normal-threshold 0.2}
+                  :color-grading {:saturation 1.0 :contrast 1.0 :exposure 0.0}
+                  :shade-color [0.2 0.3 0.45]
+                  :rim-color [0.8 0.9 1.0]
+                  :rim-intensity 0.6}
+        u (style/shader-uniforms envelope)]
+    (is (= 1 (:shade-kind u)))
+    (is (= 5 (:specular-bands u)))
+    (is (= 0.52 (:toon-threshold u)))
+    (is (= 0.03 (:toon-smooth u)))
+    (is (= [0.2 0.3 0.45] (:shade-color u)))
+    (is (= [0.8 0.9 1.0] (:rim-color u)))
+    (is (= 0.6 (:rim-intensity u))))
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"not implemented by kami.webgpu.mesh"
+       (style/shader-uniforms
+        {:contract :kotoba.render/style-v1 :profile :stylized
+         :shading {:model :toon-pbr}
+         :outline {:mode :screen-space :width-px 1.2 :color [0 0 0]
+                   :depth-threshold 0.1 :normal-threshold 0.2}}))))
+
 (deftest profiles-are-validated-before-gpu-lowering
   (testing "unknown styles cannot silently fall through"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid render-style profile"

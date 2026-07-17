@@ -52,3 +52,17 @@ GPU-2D quads, both runtimes (WebGPU + WebGL2), `pick-backend` dispatch (wired in
 Remaining: connecting the WebGL2 fallback's full render loop in isekai (the renderer, GLSL, and
 pixel-verification are all in place); native render pipelines as data (web's `default-graph` exists,
 native is still hardcoded Rust).
+# Render-style boundary
+
+`kami.webgpu.render-style` defines the pure EDN `:kotoba.render/style-v1`
+boundary shared with scenes and native renderers. A scene authors it at
+`:render/style`; a consumer may propagate it to `[:globals :render-style]`.
+
+This repository currently lowers that envelope only in `kami.webgpu.mesh`, the
+skinned/morph mesh path. It does **not** wire the style profile into the static
+instanced `kami.webgpu` render graph. The mesh backend executes PBR and toon-PBR
+shading, including per-material shade/rim/quantized highlights. It has no
+outline or color-grading pass. Consequently `:outline :screen-space` fails
+closed at mesh-uniform lowering instead of producing an unannounced fidelity
+downgrade. `:inverted-hull` is reserved by the contract and rejected during
+profile validation.
