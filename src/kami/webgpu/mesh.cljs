@@ -443,6 +443,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
           gbuf (w3/create-buffer! device #js {:size 240 :usage (bit-or (w3/buffer-usage :uniform)
                                                                        (w3/buffer-usage :copy-dst))})]
       {:vbuf vbuf :ibuf ibuf :idx-count (count indices) :vertex-count vcount
+       :submission-id (random-uuid)
        :morph-count morph-count :morph-deltas-buf morph-deltas-buf :morph-weights-buf morph-weights-buf
        :joint-count joint-count :joint-matrices-buf joint-matrices-buf
        :gbuf gbuf}))))
@@ -481,7 +482,8 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     mvp color morph-weights joint-matrices
     {:keys [color-b kind params texture sampler render-style shade-kind toon-threshold toon-smooth
             shade-color rim-color rim-intensity rim-power rim-lift specular-bands specular-threshold
-            specular-smooth highlight-intensity metallic roughness uv-offset uv-scale]
+            specular-smooth highlight-intensity metallic roughness uv-offset uv-scale
+            submission-gdata submission-joint-buffer submission-bind]
      :or {color-b color kind 0 params [0.0 0.0 0.0 0.0]
           metallic 0.0 roughness 0.5
           uv-offset [0.0 0.0] uv-scale [1.0 1.0]}}]
@@ -517,7 +519,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
          ;; 240 bytes / 4 = 60 floats: historical 44 plus four stylized vec4s.
          ;; counts+kind(4, u32 view) + params(4) + shade_kind/toon_threshold/
          ;; toon_smooth/_pad2(4, mixed u32/f32 view) + material(4) + uv_transform(4).
-         gdata (js/Float32Array. 60)]
+         gdata (or submission-gdata (js/Float32Array. 60))]
      (.set gdata mvp 0)
      (.set gdata (f32 (conj (vec color) 1.0)) 16)
      (.set gdata (f32 (conj (vec color-b) 1.0)) 20)
@@ -537,17 +539,19 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
      (w3/write-buffer! q gbuf gdata)
     (when (pos? morph-count)
       (w3/write-buffer! q morph-weights-buf (f32 (take morph-count (concat morph-weights (repeat 0.0))))))
-    (when (pos? joint-count)
+    (when (and (pos? joint-count) (nil? submission-joint-buffer))
       (w3/write-buffer! q joint-matrices-buf (js/Float32Array. (clj->js (vec (mapcat vec (take joint-count joint-matrices)))))))
-    (let [texture-view-source (or texture default-texture)
-          bind (w3/create-bind-group! device
+    (let [joint-buffer (or submission-joint-buffer joint-matrices-buf)
+          texture-view-source (or texture default-texture)
+          bind (or submission-bind
+                   (w3/create-bind-group! device
                  #js {:layout (w3/get-bind-group-layout pipe 0)
                       :entries #js [#js {:binding 0 :resource #js {:buffer gbuf}}
                                     #js {:binding 1 :resource #js {:buffer morph-deltas-buf}}
                                     #js {:binding 2 :resource #js {:buffer morph-weights-buf}}
-                                    #js {:binding 3 :resource #js {:buffer joint-matrices-buf}}
+                                    #js {:binding 3 :resource #js {:buffer joint-buffer}}
                                     #js {:binding 4 :resource (w3/create-view texture-view-source)}
-                                    #js {:binding 5 :resource (or sampler default-sampler)}]})]
+                                    #js {:binding 5 :resource (or sampler default-sampler)}]}))]
       (w3/set-pipeline! pass pipe)
       (w3/set-bind-group! pass 0 bind)
       (w3/set-vertex-buffer! pass 0 vbuf)
@@ -682,6 +686,185 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
         (draw! mesh-context pass buffers vp color [] joint-matrices)
         (w3/end-pass! pass)
         (w3/submit! queue [(w3/finish! encoder)]))))))
+
+(defn create-skinned-submission-cache
+  "Create reusable GPU resource state for cached skinned overlay packets."
+  ([] (create-skinned-submission-cache nil))
+  ([device]
+   (atom {:device device :destroyed? false :entities {} :draw-packets {}
+          :lifecycle {:entity-evictions 0 :reset-count 0 :destroy-count 0
+                      :destroyed-joint-buffers 0 :evicted-draw-packets 0
+                      :device-mismatches 0}
+          :evidence {:schema :kotoba.webgpu/skinned-submission-evidence-v1}})))
+
+(defn- destroy-entity-state! [state]
+  (when-let [buffer (:buffer state)] (w3/destroy-buffer! buffer))
+  (boolean (:buffer state)))
+
+(defn evict-skinned-entity!
+  "Destroy one entity palette buffer and forget every bind packet referencing it."
+  [cache entity-id]
+  (let [{:keys [entities draw-packets]} @cache
+        state (get entities entity-id)
+        retained (into {} (remove (fn [[[id _ _ _] _]] (= id entity-id)) draw-packets))
+        packet-count (- (count draw-packets) (count retained))]
+    (when state (destroy-entity-state! state))
+    (swap! cache (fn [c]
+                   (-> c
+                       (update :entities dissoc entity-id)
+                       (assoc :draw-packets retained)
+                       (update-in [:lifecycle :entity-evictions] (fnil inc 0))
+                       (update-in [:lifecycle :destroyed-joint-buffers]
+                                  (fnil + 0) (if state 1 0))
+                       (update-in [:lifecycle :evicted-draw-packets] (fnil + 0) packet-count))))
+    cache))
+
+(defn reset-skinned-submission-cache!
+  "Destroy all entity GPU buffers and packet references, retaining device ownership."
+  [cache]
+  (let [{:keys [entities draw-packets]} @cache]
+    (doseq [[_ state] entities] (destroy-entity-state! state))
+    (swap! cache (fn [c]
+                   (-> c
+                       (assoc :entities {} :draw-packets {})
+                       (update-in [:lifecycle :reset-count] (fnil inc 0))
+                       (update-in [:lifecycle :destroyed-joint-buffers]
+                                  (fnil + 0) (count entities))
+                       (update-in [:lifecycle :evicted-draw-packets]
+                                  (fnil + 0) (count draw-packets))))))
+  cache)
+
+(defn destroy-skinned-submission-cache!
+  "Release all owned GPU buffers and permanently invalidate this cache instance."
+  [cache]
+  (reset-skinned-submission-cache! cache)
+  (swap! cache (fn [c] (-> c (assoc :device nil :destroyed? true)
+                             (update-in [:lifecycle :destroy-count] (fnil inc 0)))))
+  cache)
+
+(defn- validate-cache-device! [cache device]
+  (let [{owned :device destroyed? :destroyed?} @cache]
+    (when destroyed?
+      (throw (js/Error. "skinned submission cache has been destroyed")))
+    (cond
+      (nil? owned) (swap! cache assoc :device device)
+      (not (identical? owned device))
+      (do
+        (reset-skinned-submission-cache! cache)
+        (swap! cache (fn [c] (-> c (assoc :device nil)
+                                   (update-in [:lifecycle :device-mismatches] (fnil inc 0)))))
+        (throw (js/Error. "skinned submission cache device changed; resources cleared"))))
+    cache))
+
+(defn- fill-joint-data! [data palette joint-count]
+  (dotimes [joint joint-count]
+    (let [matrix (nth palette joint)]
+      (dotimes [component 16]
+        (aset data (+ (* joint 16) component) (nth matrix component)))))
+  data)
+
+(defn- ensure-entity-palette! [device cache entity-id joint-count]
+  (let [required (max 1 joint-count)
+        existing (get-in @cache [:entities entity-id])]
+    (if (and existing (>= (:capacity existing) required))
+      existing
+      (let [buffer (w3/create-buffer! device #js {:size (* 64 required)
+                                                   :usage (bit-or (w3/buffer-usage :storage)
+                                                                  (w3/buffer-usage :copy-dst))})
+            state {:buffer buffer :capacity required
+                   :data (js/Float32Array. (* 16 required))}]
+        (when-let [old (:buffer existing)] (w3/destroy-buffer! old))
+        (swap! cache (fn [c]
+                       (-> c
+                           (assoc-in [:entities entity-id] state)
+                           (update :draw-packets
+                                   #(into {} (remove (fn [[[id _ _ _] _]] (= id entity-id)) %))))))
+        state))))
+
+(defn- cached-bind! [{:keys [device pipe default-texture default-sampler]} cache
+                     entity-id buffers material joint-buffer]
+  (let [{:keys [texture sampler]} material
+        texture-source (or texture default-texture)
+        sampler-source (or sampler default-sampler)
+        key [entity-id (:submission-id buffers) texture-source sampler-source]
+        cached (get-in @cache [:draw-packets key])]
+    (if cached
+      (do (swap! cache update-in [:evidence :bind-groups-reused] (fnil inc 0)) cached)
+      (let [view (w3/create-view texture-source)
+            bind (w3/create-bind-group!
+                  device
+                  #js {:layout (w3/get-bind-group-layout pipe 0)
+                       :entries #js [#js {:binding 0 :resource #js {:buffer (:gbuf buffers)}}
+                                     #js {:binding 1 :resource #js {:buffer (:morph-deltas-buf buffers)}}
+                                     #js {:binding 2 :resource #js {:buffer (:morph-weights-buf buffers)}}
+                                     #js {:binding 3 :resource #js {:buffer joint-buffer}}
+                                     #js {:binding 4 :resource view}
+                                     #js {:binding 5 :resource sampler-source}]})
+            packet {:bind bind :gdata (js/Float32Array. 60) :texture-view view}]
+        (swap! cache (fn [c] (-> c (assoc-in [:draw-packets key] packet)
+                                  (update-in [:evidence :bind-groups-created] (fnil inc 0)))))
+        packet))))
+
+(defn prepare-skinned-submission-packets!
+  "Upload one joint palette per entity for this frame and attach cached typed
+   globals/bind groups to every compatible material-range draw. Matrices are
+   always rewritten per call; changing animation is never cached across frames."
+  [{:keys [device] :as mesh-context} cache draws]
+  (validate-cache-device! cache device)
+  (let [groups (group-by :entity-id draws)]
+    (when (contains? groups nil)
+      (throw (js/Error. "cached skinned draws require :entity-id provenance")))
+    (swap! cache assoc :evidence {:schema :kotoba.webgpu/skinned-submission-evidence-v1
+                                  :source-draw-count (count draws)
+                                  :entity-count (count groups)
+                                  :joint-palette-uploads 0
+                                  :bind-groups-created 0 :bind-groups-reused 0})
+    (let [entity-states
+          (into {}
+                (for [[entity-id entity-draws] groups
+                      :let [palettes (mapv :joint-matrices entity-draws)
+                            _ (when-not (apply = palettes)
+                                (throw (js/Error. "one entity has conflicting joint palettes")))
+                            palette (first palettes)
+                            joint-count (count palette)
+                            state (ensure-entity-palette! device cache entity-id joint-count)
+                            _ (fill-joint-data! (:data state) palette joint-count)
+                            _ (w3/write-buffer! (w3/device-queue device) (:buffer state) (:data state))
+                            _ (swap! cache update-in [:evidence :joint-palette-uploads] inc)]]
+                  [entity-id state]))
+          prepared
+          (mapv (fn [{:keys [entity-id buffers material] :as draw}]
+                  (let [state (entity-states entity-id)
+                        packet (cached-bind! mesh-context cache entity-id buffers (or material {}) (:buffer state))]
+                    (update draw :material merge
+                            {:submission-gdata (:gdata packet)
+                             :submission-joint-buffer (:buffer state)
+                             :submission-bind (:bind packet)})))
+                draws)]
+      (swap! cache update :evidence assoc
+             :prepared-draw-count (count prepared)
+             :joint-upload-reduction (- (count draws) (count groups))
+             :provenance-preserved? (= (mapv :entity-id draws) (mapv :entity-id prepared)))
+      prepared)))
+
+(defn skinned-submission-evidence [cache]
+  (let [{:keys [device destroyed? entities draw-packets lifecycle evidence]} @cache]
+    (assoc evidence
+           :cache-device-bound? (some? device)
+           :cache-destroyed? destroyed?
+           :resident-entity-count (count entities)
+           :resident-draw-packet-count (count draw-packets)
+           :lifecycle lifecycle)))
+
+(declare encode-skinned-overlay!)
+
+(defn encode-skinned-overlay-cached!
+  "Cached overlay path: one palette upload per entity/frame, persistent texture
+   views/bind groups, and persistent 60-float globals arrays per draw packet."
+  [gpu-ctx mesh-context cache encoder attachments draws camera]
+  (encode-skinned-overlay! gpu-ctx mesh-context encoder attachments
+                           (prepare-skinned-submission-packets! mesh-context cache draws)
+                           camera))
 
 (defn encode-skinned-overlay!
   "Encode skinned meshes into the main renderer's graph-local world target.

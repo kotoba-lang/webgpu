@@ -155,6 +155,30 @@ the renderer interprets it as `[width height width]`. Both WebGPU and the WebGL2
 apply the same normalization. Depth occupies the model matrix's existing z-scale slot;
 the 28-float/112-byte instance ABI is unchanged.
 
+## Submission packets and skinned overlay caching
+
+`kami.webgpu.submission/build-submission-packets` groups exact compatible
+pipeline/mesh/LOD/material-resource state, packs the 32-float instance ABI and
+retains source indices, entity IDs and semantic counts. Packet and LOD budgets
+report overflow without silently dropping instances.
+
+For character overlays, create one cache with
+`kami.webgpu.mesh/create-skinned-submission-cache`, then call
+`encode-skinned-overlay-cached!`. Draws require `:entity-id`. The cached path
+uploads one current joint palette per entity per frame, while reusing texture
+views, bind groups and 60-float globals arrays across frames. It never caches
+changing matrices. `skinned-submission-evidence` reports palette uploads,
+upload reduction, bind-group creation/reuse and provenance preservation; these
+are structural counts, not synthetic timing claims.
+
+Long-lived scenes must call `evict-skinned-entity!` when a transient character
+leaves. `reset-skinned-submission-cache!` clears all resident entities while
+retaining device ownership; `destroy-skinned-submission-cache!` releases all
+owned joint buffers and permanently invalidates that cache. Device identity is
+validated on every prepare: replacement clears old resources and fails closed
+instead of allowing bind groups from an old device to survive. Lifecycle counts
+are included in `skinned-submission-evidence`.
+
 ## Status
 
 Renders instanced, lit geometry with a follow/overview camera, proven live in
