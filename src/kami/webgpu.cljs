@@ -200,8 +200,10 @@ fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(s
         samples (-> (or sample-count 12) long (max 1) (min 12))
         scale (-> (or resolution-scale 0.5) double (max 0.125) (min 1.0))
         direct-passes [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
-                       {:pipeline :atmosphere-direct :color :screen :clear [0 0 0]}
-                       {:pipeline :main-direct :color :screen :depth :direct-depth :load? true}]]
+                       {:pipeline :atmosphere :color :hdr :clear [0 0 0]}
+                       {:pipeline :main :color :hdr :depth :screen-depth :load? true}
+                       {:pipeline :normal :color :scene-normal :depth :screen-depth :depth-load? true}
+                       {:pipeline :style-direct :color :screen :clear [0 0 0]}]]
     (if enabled?
       (-> graph
           (assoc :ssao-tier (assoc tier :enabled? true
@@ -236,6 +238,7 @@ fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(s
                :normal NORMAL-WGSL
                :composite (style-post-wgsl true true)
                :ao-composite (style-post-wgsl false true)
+               :style-direct (style-post-wgsl false false)
                :depth0 (shaders/cascaded-foliage-shadow-shader 0)
                :depth1 (shaders/cascaded-foliage-shadow-shader 1)
                :depth2 (shaders/cascaded-foliage-shadow-shader 2)
@@ -301,7 +304,10 @@ fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(s
                :ao-composite {:shader :ao-composite :fullscreen true :color :screen
                               :binds [{:texture :hdr} {:texture :screen-depth}
                                       {:texture :scene-normal} {:sampler :linear} :style-uniform
-                                      {:texture :ssao}]}}
+                                      {:texture :ssao}]}
+               :style-direct {:shader :style-direct :fullscreen true :color :screen
+                              :binds [{:texture :hdr} {:texture :screen-depth}
+                                      {:texture :scene-normal} {:sampler :linear} :style-uniform]}}
    :passes    [{:pipeline :shadow0 :depth :shadow :cascade 0 :clear-depth 1.0}
                {:pipeline :shadow1 :depth :shadow :cascade 1 :clear-depth 1.0}
                {:pipeline :shadow2 :depth :shadow :cascade 2 :clear-depth 1.0}
@@ -601,14 +607,12 @@ fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(s
                    main-target (get targets :hdr)
                    depth-w (or (:width main-target) w)
                    depth-h (or (:height main-target) h)
-                   sdepth (when ssao-enabled?
-                            (w3/create-texture! device #js {:size #js [depth-w depth-h] :format "depth24plus"
-                                                           :usage (bit-or (w3/texture-usage :render-attachment)
-                                                                          (w3/texture-usage :texture-binding))}))
-                   targets (cond-> targets
-                             sdepth (assoc :screen-depth {:view (w3/create-view sdepth)
+                   sdepth (w3/create-texture! device #js {:size #js [depth-w depth-h] :format "depth24plus"
+                                                          :usage (bit-or (w3/texture-usage :render-attachment)
+                                                                         (w3/texture-usage :texture-binding))})
+                   targets (assoc targets :screen-depth {:view (w3/create-view sdepth)
                                                          :width depth-w :height depth-h
-                                                         :format "depth24plus"}))
+                                                         :format "depth24plus"})
                    direct-depth (w3/create-texture! device #js {:size #js [w h] :format "depth24plus" :usage (w3/texture-usage :render-attachment)})
                    targets (assoc targets :direct-depth {:view (w3/create-view direct-depth)
                                                          :width w :height h :format "depth24plus"})
@@ -647,8 +651,7 @@ fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(s
                 :geometry-biomes geometry-biomes
                 :geometry-decals geometry-decals
                 :adapter-options (:adapter-options opts)
-                :world-color-format (if ssao-enabled?
-                                      (get-in targets [:hdr :format]) fmt)
+                :world-color-format (get-in targets [:hdr :format])
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf
@@ -1009,6 +1012,8 @@ fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(s
                    (get-in targets [k :layer-views layer])
                    (get-in targets [k :view]))))
           frame-passes (if post-degraded? (:passes adaptive-post) (:passes graph))
+          style-pass? (boolean (some #(contains? #{:composite :ao-composite :style-direct}
+                                                  (:pipeline %)) frame-passes))
           _ (some-> post-evidence
                     (reset! {:tier (if ssao-buffer
                                      (if post-degraded? :hdr-ssao-aces :hdr-ssao-bloom)
@@ -1075,7 +1080,7 @@ fn nload(p:vec2<i32>, dims:vec2<i32>)->vec3<f32>{ return normalize(textureLoad(s
                                             fmt
                                             (get-in targets [color :format]))})))))
       (w3/submit! queue [(w3/finish! enc)])
-      (some-> style-post-evidence (swap! assoc :pass-executed? true :submitted? true))
+      (some-> style-post-evidence (swap! assoc :pass-executed? style-pass? :submitted? true))
       (some-> frame-evidence
               (swap! (fn [e]
                        (-> e

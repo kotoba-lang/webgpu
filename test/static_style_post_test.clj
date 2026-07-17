@@ -34,7 +34,7 @@
                  "style.outline_width_px" "style.depth_threshold"
                  "style.normal_threshold" "style.saturation" "style.contrast"
                  "style.exposure" "style.tone_map" ":depth-load? true"
-                 ":pass-executed? false" "swap! assoc :pass-executed? true :submitted? true"
+                 ":pass-executed? false" "swap! assoc :pass-executed? style-pass? :submitted? true"
                  ":depth-sampled? true" ":normal-sampled? true"]]
     (is (str/includes? source token) token)))
 
