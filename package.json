@@ -3,5 +3,9 @@
   "private": true,
   "devDependencies": {
     "playwright": "^1.61.1"
+  },
+  "scripts": {
+    "task": "nbb scripts/run-task.cljs",
+    "tasks": "nbb scripts/run-task.cljs"
   }
 }
