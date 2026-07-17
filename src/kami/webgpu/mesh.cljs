@@ -689,9 +689,72 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
 
 (defn create-skinned-submission-cache
   "Create reusable GPU resource state for cached skinned overlay packets."
-  []
-  (atom {:entities {} :draw-packets {}
-         :evidence {:schema :kotoba.webgpu/skinned-submission-evidence-v1}}))
+  ([] (create-skinned-submission-cache nil))
+  ([device]
+   (atom {:device device :destroyed? false :entities {} :draw-packets {}
+          :lifecycle {:entity-evictions 0 :reset-count 0 :destroy-count 0
+                      :destroyed-joint-buffers 0 :evicted-draw-packets 0
+                      :device-mismatches 0}
+          :evidence {:schema :kotoba.webgpu/skinned-submission-evidence-v1}})))
+
+(defn- destroy-entity-state! [state]
+  (when-let [buffer (:buffer state)] (w3/destroy-buffer! buffer))
+  (boolean (:buffer state)))
+
+(defn evict-skinned-entity!
+  "Destroy one entity palette buffer and forget every bind packet referencing it."
+  [cache entity-id]
+  (let [{:keys [entities draw-packets]} @cache
+        state (get entities entity-id)
+        retained (into {} (remove (fn [[[id _ _ _] _]] (= id entity-id)) draw-packets))
+        packet-count (- (count draw-packets) (count retained))]
+    (when state (destroy-entity-state! state))
+    (swap! cache (fn [c]
+                   (-> c
+                       (update :entities dissoc entity-id)
+                       (assoc :draw-packets retained)
+                       (update-in [:lifecycle :entity-evictions] (fnil inc 0))
+                       (update-in [:lifecycle :destroyed-joint-buffers]
+                                  (fnil + 0) (if state 1 0))
+                       (update-in [:lifecycle :evicted-draw-packets] (fnil + 0) packet-count))))
+    cache))
+
+(defn reset-skinned-submission-cache!
+  "Destroy all entity GPU buffers and packet references, retaining device ownership."
+  [cache]
+  (let [{:keys [entities draw-packets]} @cache]
+    (doseq [[_ state] entities] (destroy-entity-state! state))
+    (swap! cache (fn [c]
+                   (-> c
+                       (assoc :entities {} :draw-packets {})
+                       (update-in [:lifecycle :reset-count] (fnil inc 0))
+                       (update-in [:lifecycle :destroyed-joint-buffers]
+                                  (fnil + 0) (count entities))
+                       (update-in [:lifecycle :evicted-draw-packets]
+                                  (fnil + 0) (count draw-packets))))))
+  cache)
+
+(defn destroy-skinned-submission-cache!
+  "Release all owned GPU buffers and permanently invalidate this cache instance."
+  [cache]
+  (reset-skinned-submission-cache! cache)
+  (swap! cache (fn [c] (-> c (assoc :device nil :destroyed? true)
+                             (update-in [:lifecycle :destroy-count] (fnil inc 0)))))
+  cache)
+
+(defn- validate-cache-device! [cache device]
+  (let [{owned :device destroyed? :destroyed?} @cache]
+    (when destroyed?
+      (throw (js/Error. "skinned submission cache has been destroyed")))
+    (cond
+      (nil? owned) (swap! cache assoc :device device)
+      (not (identical? owned device))
+      (do
+        (reset-skinned-submission-cache! cache)
+        (swap! cache (fn [c] (-> c (assoc :device nil)
+                                   (update-in [:lifecycle :device-mismatches] (fnil inc 0)))))
+        (throw (js/Error. "skinned submission cache device changed; resources cleared"))))
+    cache))
 
 (defn- fill-joint-data! [data palette joint-count]
   (dotimes [joint joint-count]
@@ -747,6 +810,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
    globals/bind groups to every compatible material-range draw. Matrices are
    always rewritten per call; changing animation is never cached across frames."
   [{:keys [device] :as mesh-context} cache draws]
+  (validate-cache-device! cache device)
   (let [groups (group-by :entity-id draws)]
     (when (contains? groups nil)
       (throw (js/Error. "cached skinned draws require :entity-id provenance")))
@@ -784,7 +848,13 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
       prepared)))
 
 (defn skinned-submission-evidence [cache]
-  (:evidence @cache))
+  (let [{:keys [device destroyed? entities draw-packets lifecycle evidence]} @cache]
+    (assoc evidence
+           :cache-device-bound? (some? device)
+           :cache-destroyed? destroyed?
+           :resident-entity-count (count entities)
+           :resident-draw-packet-count (count draw-packets)
+           :lifecycle lifecycle)))
 
 (declare encode-skinned-overlay!)
 

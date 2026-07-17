@@ -171,6 +171,14 @@ changing matrices. `skinned-submission-evidence` reports palette uploads,
 upload reduction, bind-group creation/reuse and provenance preservation; these
 are structural counts, not synthetic timing claims.
 
+Long-lived scenes must call `evict-skinned-entity!` when a transient character
+leaves. `reset-skinned-submission-cache!` clears all resident entities while
+retaining device ownership; `destroy-skinned-submission-cache!` releases all
+owned joint buffers and permanently invalidates that cache. Device identity is
+validated on every prepare: replacement clears old resources and fails closed
+instead of allowing bind groups from an old device to survive. Lifecycle counts
+are included in `skinned-submission-evidence`.
+
 ## Status
 
 Renders instanced, lit geometry with a follow/overview camera, proven live in

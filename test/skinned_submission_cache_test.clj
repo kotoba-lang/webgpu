@@ -16,6 +16,20 @@
     (is (str/includes? source "one entity has conflicting joint palettes"))
     (is (str/includes? source "cached skinned draws require :entity-id provenance"))))
 
+(deftest lifecycle-api-destroys-evicts-and-invalidates-device-resources
+  (let [source (slurp (io/file "src/kami/webgpu/mesh.cljs"))]
+    (is (str/includes? source "(defn evict-skinned-entity!"))
+    (is (str/includes? source "(defn reset-skinned-submission-cache!"))
+    (is (str/includes? source "(defn destroy-skinned-submission-cache!"))
+    (is (str/includes? source "(defn- validate-cache-device!"))
+    (is (str/includes? source "(not (identical? owned device))"))
+    (is (str/includes? source "skinned submission cache device changed; resources cleared"))
+    (is (str/includes? source "skinned submission cache has been destroyed"))
+    (is (str/includes? source "(w3/destroy-buffer! buffer)"))
+    (is (str/includes? source ":device-mismatches"))
+    (is (str/includes? source ":destroyed-joint-buffers"))
+    (is (str/includes? source ":evicted-draw-packets"))))
+
 (deftest draw-path-accepts-preallocated-packet-state-without-stale-matrix-cache
   (let [source (slurp (io/file "src/kami/webgpu/mesh.cljs"))]
     (is (str/includes? source "submission-gdata submission-joint-buffer submission-bind"))
