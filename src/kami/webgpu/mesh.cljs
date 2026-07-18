@@ -862,9 +862,10 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
   "Cached overlay path: one palette upload per entity/frame, persistent texture
    views/bind groups, and persistent 60-float globals arrays per draw packet."
   [gpu-ctx mesh-context cache encoder attachments draws camera]
-  (encode-skinned-overlay! gpu-ctx mesh-context encoder attachments
-                           (prepare-skinned-submission-packets! mesh-context cache draws)
-                           camera))
+  (assoc (encode-skinned-overlay! gpu-ctx mesh-context encoder attachments
+                                  (prepare-skinned-submission-packets! mesh-context cache draws)
+                                  camera)
+         :cache (skinned-submission-evidence cache)))
 
 (defn encode-skinned-overlay!
   "Encode skinned meshes into the main renderer's graph-local world target.
@@ -894,7 +895,15 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                (m4-mul projection (model-matrix (or transform {})))
                color (or morph-weights [])
                joint-matrices material))
-      (w3/end-pass! pass))))
+      (w3/end-pass! pass)
+      {:kind :skinned-overlay
+       :draw-count (count draws)
+       :entity-ids (vec (distinct (keep :entity-id draws)))
+       :submitted-roles (vec (distinct (keep :role draws)))
+       :projected-screen-bounds (vec (keep :projected-screen-bounds draws))
+       :projected-screen-bounds-count (count (keep :projected-screen-bounds draws))
+       :projected-screen-bounds-provenance :consumer-supplied
+       :device-match? true})))
 
 (defn render-skinned-scene!
   "Render multiple skinned parts in one depth-preserving frame on either

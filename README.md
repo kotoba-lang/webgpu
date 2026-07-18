@@ -179,6 +179,16 @@ validated on every prepare: replacement clears old resources and fails closed
 instead of allowing bind groups from an old device to survive. Lifecycle counts
 are included in `skinned-submission-evidence`.
 
+Capture gates can read `:capture-presence` from `backend-evidence`. The renderer
+publishes schema `:kotoba.webgpu/capture-presence-evidence-v2` only after the
+frame command buffer is accepted by `queue.submit`; a later frame without an
+overlay clears it, and device loss invalidates it. Skinned overlays report the
+encoded entity IDs, semantic `:role` values, draw count, device/cache state and
+any `:projected-screen-bounds` supplied by the consumer. Bounds are explicitly
+tagged `:consumer-supplied`: the renderer does not claim projection or perform
+pixel readback. Deterministic capture still owns simulation freeze in the host;
+`kami.webgpu/settle!` only provides the submitted-work completion barrier.
+
 ## Status
 
 Renders instanced, lit geometry with a follow/overview camera, proven live in
