@@ -570,6 +570,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
              (let [gpu-errors (atom [])
                    device-loss (atom nil)
                    frame-evidence (atom {:draw-attempts 0 :submits 0})
+                   capture-presence (atom nil)
                    _ (set! (.-onuncapturederror device)
                            (fn [event]
                              (swap! gpu-errors conj
@@ -578,7 +579,11 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                          (.then (fn [info]
                                   (reset! device-loss
                                           {:reason (str (.-reason info))
-                                           :message (str (.-message info))}))))
+                                           :message (str (.-message info))})
+                                  (reset! capture-presence
+                                          {:schema :kotoba.webgpu/capture-presence-evidence-v2
+                                           :submitted? false :valid? false
+                                           :invalidated-by :device-loss}))))
                    graph-base (-> (or (:graph opts) default-graph)
                                   (adaptive-ssao-graph (:ssao-tier opts))
                                   (resolve-hdr-graph packed-hdr?))
@@ -692,6 +697,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                 :gpu-errors gpu-errors
                 :device-loss device-loss
                 :frame-evidence frame-evidence
+                :capture-presence capture-presence
                 :geometry-biomes geometry-biomes
                 :geometry-decals geometry-decals
                 :adapter-options (:adapter-options opts)
@@ -872,6 +878,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
   [{:keys [device queue ctx fmt w h vbuf ibuf inst-buffer gbuf atmosphere-buffer ssao-buffer style-buffer idx-count targets pipelines graph
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
            atmosphere-evidence ssao-evidence style-post-evidence frame-evidence foliage-evidence world-overlay
+           capture-presence gpu-errors device-loss
            render-bundle-cache]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
@@ -1050,6 +1057,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
       (when (and grew? render-bundle-cache) (reset! render-bundle-cache {}))
       (when (or (not cache-hit?) grew?) (w3/write-buffer! queue buf 0 idata))
     (let [enc (w3/create-command-encoder! device)
+          overlay-presence (volatile! nil)
           ninst (count insts)
           screen-view (w3/create-view (w3/current-texture ctx))
           vw (fn [k layer]
@@ -1120,12 +1128,22 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
           (when (and (contains? #{:main :main-direct} pipeline) color depth
                      (contains? #{:screen-depth :direct-depth} depth))
             (when-let [encode! (some-> world-overlay deref)]
-              (encode! enc {:color-view (vw color nil)
-                            :depth-view (vw depth cascade)
-                            :color-format (if (= color :screen)
-                                            fmt
-                                            (get-in targets [color :format]))})))))
+              (when-let [presence (encode! enc {:color-view (vw color nil)
+                                                :depth-view (vw depth cascade)
+                                                :color-format (if (= color :screen)
+                                                                fmt
+                                                                (get-in targets [color :format]))})]
+                (vreset! overlay-presence presence)))))
       (w3/submit! queue [(w3/finish! enc)])
+      (some-> capture-presence
+              (reset! (when-let [presence @overlay-presence]
+                        (merge presence
+                               {:schema :kotoba.webgpu/capture-presence-evidence-v2
+                                :submitted? true :valid? true
+                                :submit-sequence (inc (get @frame-evidence :submits 0))
+                                :backend :webgpu
+                                :device-lost? false
+                                :gpu-error-count (count @gpu-errors)})))))
       (some-> style-post-evidence (swap! assoc :pass-executed? style-pass? :submitted? true))
       (some-> frame-evidence
               (swap! (fn [e]
@@ -1187,6 +1205,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
    :gpu-errors (if-let [errors (:gpu-errors ctx)] @errors [])
    :device-loss (some-> ctx :device-loss deref)
    :frames (some-> ctx :frame-evidence deref)
+   :capture-presence (some-> ctx :capture-presence deref)
    :post (some-> ctx :post-evidence deref)
    :ssao (some-> ctx :ssao-evidence deref)
    :atmosphere (some-> ctx :atmosphere-evidence deref)
