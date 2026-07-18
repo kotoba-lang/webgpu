@@ -3,18 +3,18 @@
 ;; Remaining here: kami.webgpu* executor only.
 ;; cartpole-math → kotoba-lang/cartpole-math; webgpu-rs → kotoba-lang/webgpu-rs.
 {:paths ["src"]
- :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu"}
+ :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu-character-detail"}
          io.github.kotoba-lang/wgsl {:local/root "../wgsl"}
          io.github.kotoba-lang/expr {:local/root "../expr"}
          io.github.kotoba-lang/sprite-gpu {:local/root "../sprite-gpu"}
          io.github.kotoba-lang/sprite2d {:local/root "../sprite2d"}
          io.github.kotoba-lang/sky {:local/root "../sky"}
-         io.github.kotoba-lang/shaders {:local/root "../shaders"}
-         io.github.kotoba-lang/render {:local/root "../render"}
+         io.github.kotoba-lang/shaders {:local/root "../shaders-character-detail"}
+         io.github.kotoba-lang/render {:local/root "../render-character-weapon-detail"}
          io.github.kotoba-lang/render-shaders {:local/root "../render-shaders"}
          io.github.kotoba-lang/scene2d {:local/root "../scene2d"}
-         io.github.kotoba-lang/gpu {:local/root "../gpu"}
-         io.github.kotoba-lang/webgl {:local/root "../webgl"}
+         io.github.kotoba-lang/gpu {:local/root "../gpu-character-detail"}
+         io.github.kotoba-lang/webgl {:local/root "../webgl-character-detail"}
          io.github.kotoba-lang/dance {:local/root "../dance"}
          io.github.kotoba-lang/physics {:local/root "../physics"}
          io.github.kotoba-lang/fsm {:local/root "../fsm"}
