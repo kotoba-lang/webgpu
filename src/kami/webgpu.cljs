@@ -398,23 +398,53 @@
           (w3/end-pass! rp)))
       (w3/submit! queue [(w3/finish! enc)])))))
 
-(defn- draw-webgl! [{:keys [geos width height instance-cache] :as viewport} render-ir]
+(defn- webgl-vp [{:keys [width height]} render-ir]
+  (let [instances (:instances render-ir)
+        n (max 1 (count instances))
+        cxx (/ (reduce + (map #(get-in % [:pos 0] 0) instances)) n)
+        czz (/ (reduce + (map #(get-in % [:pos 2] 0) instances)) n)
+        globals (:globals render-ir)
+        eye (arr3 globals :eye [(+ cxx 60) 80 (+ czz 60)])
+        target (arr3 globals :target [cxx 0 czz])
+        fov (or (:fov globals) 60) near (or (:near globals) 0.5) far (or (:far globals) 4000)]
+    (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far)
+            (look-at (vec eye) (vec target) [0 1 0]))))
+
+(defn- webgl-instance-draw [geos vp {:keys [pos color size yaw geo]}]
+  {:buffers (get geos (or geo :box) (:box geos))
+   :mvp (m4-mul vp (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1)))
+   :color (or color [0.7 0.75 0.82])})
+
+(defn prepare!
+  "Cooperatively prepare static WebGL2 instance transforms without a long
+  main-thread task. WebGPU preparation remains lazy in its GPU buffer path."
+  [ctx render-ir]
+  (if (not= :webgl2 (:backend ctx))
+    (js/Promise.resolve ctx)
+    (let [instances (:instances render-ir) globals (:globals render-ir)
+          cached @(:instance-cache ctx)]
+      (if (and cached (identical? instances (:instances cached)) (= globals (:globals cached)))
+        (js/Promise.resolve ctx)
+        (let [vp (webgl-vp ctx render-ir) batches (atom (seq (partition-all 1000 instances))) draws (atom [])]
+          (js/Promise.
+           (fn [resolve _]
+             (letfn [(step []
+                       (if-let [batch (first @batches)]
+                         (do (swap! draws into (map #(webgl-instance-draw (:geos ctx) vp %) batch))
+                             (swap! batches next) (js/requestAnimationFrame step))
+                         (do (reset! (:instance-cache ctx)
+                                     {:instances instances :globals globals :draws @draws})
+                             (resolve ctx))))]
+               (step)))))))))
+
+(defn- draw-webgl! [{:keys [geos instance-cache] :as viewport} render-ir]
   (let [instances (:instances render-ir)
         cached @instance-cache
         cache-hit? (and cached (identical? instances (:instances cached))
                         (= (:globals render-ir) (:globals cached)))
         computed (if cache-hit? cached
-                   (let [{:keys [cxx czz]} (compute-instance-data instances)
-                         globals (:globals render-ir)
-                         eye (arr3 globals :eye [(+ cxx 60) 80 (+ czz 60)])
-                         target (arr3 globals :target [cxx 0 (+ czz 0)])
-                         fov (or (:fov globals) 60) near (or (:near globals) 0.5) far (or (:far globals) 4000)
-                         vp (m4-mul (perspective (/ (* fov js/Math.PI) 180.0) (/ width (max 1 height)) near far)
-                                    (look-at (vec eye) (vec target) [0 1 0]))
-                         draws (mapv (fn [{:keys [pos color size yaw geo]}]
-                                       {:buffers (get geos (or geo :box) (:box geos))
-                                        :mvp (m4-mul vp (model-mat pos (or yaw 0) ((or size [1 1]) 0) ((or size [1 1]) 1)))
-                                        :color (or color [0.7 0.75 0.82])}) instances)]
+                   (let [vp (webgl-vp viewport render-ir)
+                         draws (mapv #(webgl-instance-draw geos vp %) instances)]
                      {:instances instances :globals (:globals render-ir) :draws draws}))
         _ (when-not cache-hit? (reset! instance-cache computed))
         draws (:draws computed)]
