@@ -3,24 +3,45 @@
 ;; Remaining here: kami.webgpu* executor only.
 ;; cartpole-math → kotoba-lang/cartpole-math; webgpu-rs → kotoba-lang/webgpu-rs.
 {:paths ["src"]
- :deps  {io.github.kotoba-lang/org-w3-webgpu {:local/root "../org-w3-webgpu"}
-         io.github.kotoba-lang/wgsl {:local/root "../wgsl"}
-         io.github.kotoba-lang/expr {:local/root "../expr"}
-         io.github.kotoba-lang/sprite-gpu {:local/root "../sprite-gpu"}
-         io.github.kotoba-lang/sprite2d {:local/root "../sprite2d"}
-         io.github.kotoba-lang/sky {:local/root "../sky"}
-         io.github.kotoba-lang/shaders {:local/root "../shaders"}
-         io.github.kotoba-lang/render {:local/root "../render"}
-         io.github.kotoba-lang/render-shaders {:local/root "../render-shaders"}
-         io.github.kotoba-lang/scene2d {:local/root "../scene2d"}
-         io.github.kotoba-lang/gpu {:local/root "../gpu"}
-         io.github.kotoba-lang/webgl {:local/root "../webgl"}
-         io.github.kotoba-lang/dance {:local/root "../dance"}
-         io.github.kotoba-lang/physics {:local/root "../physics"}
-         io.github.kotoba-lang/fsm {:local/root "../fsm"}
-         io.github.kotoba-lang/netsync {:local/root "../netsync"}
-         io.github.kotoba-lang/pipelines {:local/root "../pipelines"}
-         io.github.kotoba-lang/level {:local/root "../level"}
-         io.github.kotoba-lang/host {:local/root "../host"}
-         io.github.kotoba-lang/playwright {:local/root "../playwright"}
-         io.github.kotoba-lang/cartpole-math {:local/root "../cartpole-math"}}}
+ :deps  {io.github.kotoba-lang/org-w3-webgpu {:git/url "https://github.com/kotoba-lang/org-w3-webgpu.git"
+                                     :git/sha "05b7b9914e28cf53ab7ba73e2e0040f6de68e616"}
+         io.github.kotoba-lang/wgsl {:git/url "https://github.com/kotoba-lang/wgsl.git"
+                                     :git/sha "5ab259fed373f3a2bf40305e13005a2b89540ed3"}
+         io.github.kotoba-lang/expr {:git/url "https://github.com/kotoba-lang/expr.git"
+                                     :git/sha "3bf48bff59aa1fb1ea48a0b84103d63fd2b507ff"}
+         io.github.kotoba-lang/sprite-gpu {:git/url "https://github.com/kotoba-lang/sprite-gpu.git"
+                                     :git/sha "77fca743519c109344114fe2d308076dd323830b"}
+         io.github.kotoba-lang/sprite2d {:git/url "https://github.com/kotoba-lang/sprite2d.git"
+                                     :git/sha "ca031b0f5611c611557b4ed4daccbe024baad2d7"}
+         io.github.kotoba-lang/sky {:git/url "https://github.com/kotoba-lang/sky.git"
+                                     :git/sha "288d62d32a07d6a7621d336d03b53cd22f57009d"}
+         io.github.kotoba-lang/shaders {:git/url "https://github.com/kotoba-lang/shaders.git"
+                                     :git/sha "b9e8f0afa2e631ce404e8c6bc795dc697a2efb3c"}
+         io.github.kotoba-lang/render {:git/url "https://github.com/kotoba-lang/render.git"
+                                     :git/sha "ae1888d9bb11ca867e9844e925e6dc77eefb1f16"}
+         io.github.kotoba-lang/render-shaders {:git/url "https://github.com/kotoba-lang/render-shaders.git"
+                                     :git/sha "fd8a5bf52452fcfd24d5980ce20696ca4bf528ee"}
+         io.github.kotoba-lang/scene2d {:git/url "https://github.com/kotoba-lang/scene2d.git"
+                                     :git/sha "97335bc43f0d4d6d3fe75a192d40f5e14918a919"}
+         io.github.kotoba-lang/gpu {:git/url "https://github.com/kotoba-lang/gpu.git"
+                                     :git/sha "03b9fdf854a8e63f53326ef8c78b22c845256b7e"}
+         io.github.kotoba-lang/webgl {:git/url "https://github.com/kotoba-lang/webgl.git"
+                                     :git/sha "ec465866da53138cbfdd5187420f2c1ba81a75cd"}
+         io.github.kotoba-lang/dance {:git/url "https://github.com/kotoba-lang/dance.git"
+                                     :git/sha "4b6d263047530961a0960ad9fc9bd6d870e760f4"}
+         io.github.kotoba-lang/physics {:git/url "https://github.com/kotoba-lang/physics.git"
+                                     :git/sha "5fbd5979dfe6a0be92c43c439e41878b9ef5f9c8"}
+         io.github.kotoba-lang/fsm {:git/url "https://github.com/kotoba-lang/fsm.git"
+                                     :git/sha "2bb3226d22eeb71b5fce3103f9767727ea8f252a"}
+         io.github.kotoba-lang/netsync {:git/url "https://github.com/kotoba-lang/netsync.git"
+                                     :git/sha "4c3f8045f76cd18eeae5ff231089a1dd336b4351"}
+         io.github.kotoba-lang/pipelines {:git/url "https://github.com/kotoba-lang/pipelines.git"
+                                     :git/sha "0e2aaf67e306c8942a5b5d12cb9dafb783ec3c7e"}
+         io.github.kotoba-lang/level {:git/url "https://github.com/kotoba-lang/level.git"
+                                     :git/sha "d63ad49c14f2dd935ca9cf54cc4971e180527fe7"}
+         io.github.kotoba-lang/host {:git/url "https://github.com/kotoba-lang/host.git"
+                                     :git/sha "14543570066ffed08afa6143311828424a065713"}
+         io.github.kotoba-lang/playwright {:git/url "https://github.com/kotoba-lang/playwright.git"
+                                     :git/sha "92af1e7054167c7e850d33e5d009289649c6f174"}
+         io.github.kotoba-lang/cartpole-math {:git/url "https://github.com/kotoba-lang/cartpole-math.git"
+                                     :git/sha "7c6cb3076689165b9aa63487e39ef119841beca4"}}}
