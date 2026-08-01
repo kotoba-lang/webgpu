@@ -258,18 +258,36 @@
 ;; A rig is data: store it as datoms, fork it, animate :azimuth — the executor just
 ;; consumes the eye/target it produces.
 
-(def default-rig {:distance 64.0 :height 55.0 :azimuth 0.785 :look-height 0.0})
+(def default-rig
+  {:distance 64.0 :height 55.0 :azimuth 0.785 :look-height 0.0 :follow-height 0.0})
 
 (defn rig->camera
-  "Given a camera-rig map and the follow point [x z] (world), return {:eye :target}.
+  "Given a camera-rig map and the follow point (world), return {:eye :target}.
    eye orbits the target at :distance/:azimuth, raised to :height; target sits at
-   :look-height above the follow point."
-  [rig [px pz]]
-  (let [{:keys [distance height azimuth look-height]} (merge default-rig rig)]
+   :look-height above the follow point.
+
+   The follow point is `[x z]` (ground plane) or `[x y z]`. With `[x y z]`, `:follow-height`
+   is the fraction of the followed altitude that the rig rises by — 0.0 (the default, and
+   what every 2-element caller gets) pins the camera at a fixed height exactly as before,
+   1.0 tracks the subject one-for-one.
+
+   A rig that ignores altitude entirely is fine for a game played on the ground, and wrong
+   for one where altitude IS the mechanic: with a fixed eye and a fixed look-at, climbing
+   moves the subject a few pixels up a frame that never reacts, so the player has no way to
+   read their own height or judge another object's. Partial follow (~0.6-0.8) is usually
+   better than 1.0 — it keeps some parallax against the ground so the climb still *reads*
+   as a climb rather than as the world sliding down."
+  [rig follow]
+  (let [{:keys [distance height azimuth look-height follow-height]} (merge default-rig rig)
+        [px py pz] (if (<= 3 (count follow)) follow [(nth follow 0) 0.0 (nth follow 1)])
+        dy (* (or follow-height 0.0) (or py 0.0))
+        ;; a rig that isn't following altitude returns its heights untouched rather than
+        ;; widened by a `(+ h 0.0)` — every existing caller keeps the exact value it had
+        raise (fn [h] (if (zero? dy) h (+ h dy)))]
     {:eye    [(+ px (* distance #?(:clj (Math/cos azimuth) :cljs (js/Math.cos azimuth))))
-              height
+              (raise height)
               (+ pz (* distance #?(:clj (Math/sin azimuth) :cljs (js/Math.sin azimuth))))]
-     :target [px look-height pz]}))
+     :target [px (raise look-height) pz]}))
 
 (defn valid?
   "A cheap structural check — enough to catch obvious authoring mistakes."

@@ -6,7 +6,7 @@
          '[kami.netsync :as net]
          '[kami.level :as level]
          '[kami.webgpu.ir :as ir]
-         '[clojure.test :refer [deftest is run-tests]])
+         '[clojure.test :refer [deftest is testing run-tests]])
 
 (deftest fsm-advance
   (is (= :move (fsm/advance fsm/default-player-fsm :idle #{:moving})))
@@ -43,6 +43,24 @@
     (is (< (Math/abs (- (double (eye 0)) 70.0)) 0.01) "eye.x = distance*cos(azimuth)")
     (is (= 48 (eye 1)) "eye.y = height")
     (is (= 1 (target 1)) "target.y = look-height")))
+
+(deftest camera-rig-follows-altitude
+  (let [rig {:distance 70 :height 48 :azimuth 0 :look-height 1}]
+    (testing "a 3-element follow point with no :follow-height still pins the height —
+              every game that never set an altitude is untouched"
+      (let [{:keys [eye target]} (ir/rig->camera rig [0 12 0])]
+        (is (= 48 (eye 1)))
+        (is (= 1 (target 1)))))
+    (testing "with :follow-height the rig rises by that fraction of the subject's altitude"
+      (let [{:keys [eye target]} (ir/rig->camera (assoc rig :follow-height 0.75) [0 12 0])]
+        (is (= 57.0 (double (eye 1))) "48 + 0.75*12")
+        (is (= 10.0 (double (target 1))) "1 + 0.75*12")))
+    (testing "diving below the ground plane lowers the rig the same way"
+      (let [{:keys [eye]} (ir/rig->camera (assoc rig :follow-height 1.0) [0 -4 0])]
+        (is (= 44.0 (double (eye 1))))))
+    (testing "the ground track is unaffected by altitude"
+      (let [{:keys [target]} (ir/rig->camera (assoc rig :follow-height 1.0) [3 12 5])]
+        (is (= [3 5] [(target 0) (target 2)]))))))
 
 (deftest ir-helpers
   (is (ir/valid? (ir/render-ir (ir/sky [0.7 0.8 0.9] [-0.4 -0.85 -0.35] [1 1 1])
