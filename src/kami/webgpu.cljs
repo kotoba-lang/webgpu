@@ -193,11 +193,27 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
     graph
     (walk/postwalk-replace {HDR-FORMAT "rgba16float"} graph)))
 
+(declare adaptive-ssao-graph*)
+
 (defn adaptive-ssao-graph
   "Apply a resolved, data-owned SSAO tier before GPU resources are allocated.
    Disabled tiers use the direct atmosphere/main path, so no AO texture or
    fullscreen AO pass is sampled. Enabled tiers retain contact grounding with
    an explicit sample and internal-resolution budget."
+  [graph {:keys [enabled? sample-count resolution-scale] :as tier}]
+  ;; A graph that declares no :ssao target has no SSAO to tier. Without this
+  ;; guard the enabled branch's `(assoc-in [:targets :ssao :scale] …)` INVENTS
+  ;; an :ssao target carrying a scale and no :color/:depth, and target
+  ;; allocation then calls createTexture with format null — which is how any
+  ;; custom graph (a sky, a backdrop, a bespoke post chain) failed at init
+  ;; before it ever reached its own pipeline, with the real error swallowed by
+  ;; the WebGL2 fallback catch. The default graph declares :ssao, so its
+  ;; behaviour is unchanged.
+  (if-not (contains? (:targets graph) :ssao)
+    graph
+    (adaptive-ssao-graph* graph tier)))
+
+(defn- adaptive-ssao-graph*
   [graph {:keys [enabled? sample-count resolution-scale] :as tier}]
   (let [enabled? (not= false enabled?)
         samples (-> (or sample-count 12) long (max 1) (min 12))
@@ -403,7 +419,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
    :depthStencilFormat (some-> depth :format)})
 
 (defn- build-bind   ;; wire group-0 entries from the pipeline's :binds vector (EDN)
-  [device pipe gbuf atmosphere-buffer ssao-buffer style-buffer targets samplers binds]
+  [device pipe gbuf atmosphere-buffer ssao-buffer style-buffer custom-uniforms targets samplers binds]
   (w3/create-bind-group! device
     #js {:layout (w3/get-bind-group-layout pipe 0)
          :entries (into-array
@@ -414,6 +430,19 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                           (= b :atmosphere-uniform) #js {:binding i :resource #js {:buffer atmosphere-buffer}}
                           (= b :ssao-uniform) #js {:binding i :resource #js {:buffer ssao-buffer}}
                           (= b :style-uniform) #js {:binding i :resource #js {:buffer style-buffer}}
+                          ;; {:uniform <name>} — a buffer the graph declared under
+                          ;; :uniforms. Unknown names fail loudly: a silently
+                          ;; unbound uniform renders a frame full of zeroes,
+                          ;; which reads as a shader bug for as long as it takes
+                          ;; to find the typo.
+                          (:uniform b)
+                          (if-let [buf (get custom-uniforms (:uniform b))]
+                            #js {:binding i :resource #js {:buffer buf}}
+                            (throw (ex-info (str "kami.webgpu: pipeline binds {:uniform "
+                                                 (:uniform b) "} but the graph declares no"
+                                                 " :uniforms entry for it")
+                                            {:uniform (:uniform b)
+                                             :declared (vec (keys custom-uniforms))})))
                           (:texture b)   #js {:binding i :resource (get-in targets [(:texture b) :view])}
                           (:sampler b)   #js {:binding i :resource (get samplers (:sampler b))}))
                       binds))}))
@@ -623,6 +652,24 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                    ssao-buffer (when ssao-enabled?
                                  (w3/create-buffer! device #js {:size 48 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))}))
                    style-buffer (w3/create-buffer! device #js {:size 64 :usage (bit-or (w3/buffer-usage :uniform) (w3/buffer-usage :copy-dst))})
+                   ;; Caller-supplied uniforms, declared by the graph as
+                   ;; {:uniforms {<name> {:size <bytes>}}} and bound by
+                   ;; {:uniform <name>}. Before this, `build-bind` recognised
+                   ;; only the four engine-owned buffers above, each a fixed
+                   ;; size — so a domain package that wanted its own uniform
+                   ;; (a sky, a backdrop, a custom post pass) had no way to
+                   ;; express one through the graph and had to reach past the
+                   ;; executor to the raw W3C binding, i.e. start a second
+                   ;; renderer. The buffer is engine-allocated and written via
+                   ;; `write-uniform!`; the graph still owns the layout.
+                   custom-uniforms
+                   (reduce-kv (fn [m k {:keys [size]}]
+                                (assoc m k (w3/create-buffer!
+                                            device
+                                            #js {:size size
+                                                 :usage (bit-or (w3/buffer-usage :uniform)
+                                                                (w3/buffer-usage :copy-dst))})))
+                              {} (:uniforms graph))
                    ;; samplers from EDN
                    samplers (reduce-kv (fn [m k s] (assoc m k (w3/create-sampler! device (clj->js s)))) {} (:samplers graph))
                    ;; offscreen targets from EDN (RENDER_ATTACHMENT + sampleable) + implicit screen-depth
@@ -689,7 +736,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                                    (assoc m k {:pipe pipe
                                                :fullscreen (:fullscreen pd)
                                                :bundle-descriptor (render-bundle-descriptor fmt pd)
-                                               :bind (build-bind device pipe gbuf atmosphere-buffer ssao-buffer style-buffer targets samplers (:binds pd))})))
+                                               :bind (build-bind device pipe gbuf atmosphere-buffer ssao-buffer style-buffer custom-uniforms targets samplers (:binds pd))})))
                                {} (:pipelines graph))]
                (w3/configure-context! ctx #js {:device device :format fmt :alphaMode "opaque"})
                {:backend :webgpu :device device :queue q :ctx ctx :fmt fmt :w w :h h
@@ -706,6 +753,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                 :world-color-format (get-in targets [:hdr :format])
                 :hdr-format (if packed-hdr? HDR-FORMAT "rgba16float")
                 :packed-hdr-feature? packed-hdr?
+                :custom-uniforms custom-uniforms
                 :vbuf (:vbuf box) :ibuf (:ibuf box) :inst-buffer inst-buffer :gbuf gbuf
                 :atmosphere-buffer atmosphere-buffer :ssao-buffer ssao-buffer :style-buffer style-buffer :idx-count (:idx-count box)
                 :geos geos
@@ -1152,6 +1200,32 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                            (assoc :submitted-instance-count ninst
                                   :pass-count (count frame-passes)
                                   :render-bundle-count (count (or (some-> render-bundle-cache deref) {})))))))))))
+
+(defn write-uniform!
+  "Write floats into a caller-supplied uniform declared by the graph's
+  :uniforms key.
+
+  `data` is a seq of numbers or a Float32Array. Throws on an undeclared name,
+  and on a payload longer than the declared size — a short write leaves stale
+  bytes and a long one is silently truncated by the driver, and both look like
+  a shader bug rather than a caller bug.
+
+  Returns ctx, so a frame can thread it."
+  [ctx name data]
+  (if-not (= :webgpu (:backend ctx))
+    ctx
+    (let [buf (get (:custom-uniforms ctx) name)
+          arr (if (instance? js/Float32Array data) data (js/Float32Array. (clj->js data)))]
+      (when-not buf
+        (throw (ex-info (str "kami.webgpu/write-uniform!: no uniform " name
+                             " declared in the graph")
+                        {:uniform name
+                         :declared (vec (keys (:custom-uniforms ctx)))})))
+      (when (> (.-byteLength arr) (.-size buf))
+        (throw (ex-info "kami.webgpu/write-uniform!: payload exceeds declared size"
+                        {:uniform name :bytes (.-byteLength arr) :size (.-size buf)})))
+      (w3/write-buffer! (:queue ctx) buf 0 arr)
+      ctx)))
 
 (defn set-world-overlay!
   "Install the current frame's graph-local overlay encoder. The callback runs

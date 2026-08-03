@@ -4,6 +4,35 @@ kami-webgpu — declarative WebGPU + UI/input/audio/state from EDN (hiccup for t
 
 ## Unreleased
 
+### Custom render graphs: caller-supplied uniforms, and SSAO tiering that stays out of their way (2026-08-03)
+
+Two changes that together let a domain package drive this executor with its own
+graph instead of reaching past it to `org-w3-webgpu` and growing a second
+renderer.
+
+**`:uniforms` + `{:uniform <name>}` binds + `write-uniform!`.** `build-bind`
+recognised exactly four uniform binds — `:uniform`, `:atmosphere-uniform`,
+`:ssao-uniform`, `:style-uniform` — all engine-owned buffers of fixed size, so a
+graph with a uniform of its own had no way to express one. A graph may now
+declare `{:uniforms {:my-thing {:size 192}}}`, bind it with
+`{:uniform :my-thing}`, and write it with
+`(write-uniform! ctx :my-thing floats)`. Unknown names throw on both paths: an
+unbound uniform renders a frame of zeroes, which reads as a shader bug for as
+long as it takes to find the typo.
+
+**`adaptive-ssao-graph` no longer invents an `:ssao` target.** Its enabled
+branch did `(assoc-in graph [:targets :ssao :scale] scale)` unconditionally, so
+any graph that declared no SSAO target got one carrying a scale and no
+`:color`/`:depth` — and target allocation then called `createTexture` with
+`format: null`. Every custom graph therefore failed at init before reaching its
+own pipeline, with the real error swallowed by the WebGL2 fallback's `.catch`.
+It now returns the graph untouched when `:targets` has no `:ssao`. The default
+graph declares one, so its behaviour is unchanged.
+
+Found while building `kotoba-lang/byoubu-gpu`, which renders a backdrop as one
+fullscreen pass through this executor — verified in Chrome on a real WebGPU
+device.
+
 ### Reuse geometry command streams with WebGPU render bundles (2026-07-16)
 
 World streaming changes instance-buffer contents, but not the pipeline/bind-group/
