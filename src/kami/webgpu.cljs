@@ -393,8 +393,41 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                              (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)
                              (vattr "float32x4" 96 10) (vattr "float32x4" 112 13)]}])
 
-(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen fragment]}]
+;; ── blend modes ────────────────────────────────────────────────────────────
+;; The vocabulary is deliberately the same as `kami.pipelines`' :blend
+;; (#{:none :alpha}), the EDN table that describes the open-world pipelines
+;; (terrain/sky/vegetation/character/water/voxel/particle/atlas). That table has
+;; carried :blend since it was written; this executor never read it, so every
+;; pipeline here was opaque and the four alpha-blended members of that family —
+;; water, particle, atlas, and vegetation's alpha — had nowhere to live
+;; (ADR-2608040400). Sharing the vocabulary means a graph can name a blend the
+;; same way the table does.
+;;
+;; :alpha is straight (non-premultiplied) source-alpha over: the shader returns
+;; colour un-multiplied and this does the multiply. Premultiplied would need a
+;; separate mode rather than a different meaning for this one — a graph that
+;; guesses wrong gets a visibly wrong result, not an error, so the two must not
+;; share a name.
+(def ^:private blend-modes
+  {:alpha #js {:color #js {:srcFactor "src-alpha" :dstFactor "one-minus-src-alpha" :operation "add"}
+               :alpha #js {:srcFactor "one" :dstFactor "one-minus-src-alpha" :operation "add"}}})
+
+(defn- blend-state
+  "GPUBlendState for a pipeline's :blend, or nil for :none / absent.
+   Throws on an unknown mode: a silently-ignored blend renders opaque and reads
+   as a shader bug until someone finds the typo — the same failure the custom
+   :uniforms path is guarded against."
+  [blend]
+  (when (and blend (not= blend :none))
+    (or (get blend-modes blend)
+        (throw (ex-info "unknown :blend" {:blend blend :known (conj (vec (keys blend-modes)) :none)})))))
+
+(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen fragment blend]}]
   (let [mod (w3/create-shader-module! device #js {:code (get shaders shader)})
+        bs (blend-state blend)
+        _ (when (and bs (not color))
+            (throw (ex-info "pipeline declares :blend but has no :color target to blend into"
+                            {:shader shader :blend blend})))
         desc #js {:layout "auto"
                   :vertex #js {:module mod :entryPoint "vs"
                                :buffers (if fullscreen #js [] (vlayout))}
@@ -406,7 +439,9 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
     (when (or color fragment) ;; alpha-masked depth pass needs a fragment discard stage
       (set! (.-fragment desc) #js {:module mod :entryPoint "fs"
                                    :targets (if color
-                                              #js [#js {:format (if (= color :screen) fmt color)}]
+                                              (let [t #js {:format (if (= color :screen) fmt color)}]
+                                                (when bs (set! (.-blend t) bs))
+                                                #js [t])
                                               #js [])}))
     (w3/create-render-pipeline! device desc)))
 

@@ -4,6 +4,36 @@ kami-webgpu — declarative WebGPU + UI/input/audio/state from EDN (hiccup for t
 
 ## Unreleased
 
+### Graph pipelines can declare `:blend` (2026-08-04)
+
+`build-pipeline` recognised `:shader :cull :depth :color :fullscreen :fragment`
+and nothing else — `blend` appeared **nowhere** in `kami/webgpu.cljs`, so every
+pipeline this executor could build was opaque. That is the single structural
+reason the alpha-blended half of the open-world pipeline family had nowhere to
+live: `kami.pipelines` describes `:water`, `:particle`, `:atlas` (and
+`:vegetation`) as `:blend :alpha`, and this executor could not express any of
+them regardless of whether their shaders existed. They do exist —
+`kami-engine/kami-render/src/shaders/scene_particle.wgsl` is a complete
+camera-facing billboard with age/life fade — they simply had no pipeline slot.
+See ADR-2608040400.
+
+A pipeline may now declare `:blend :alpha`; `:none` and absent stay opaque. The
+vocabulary is deliberately `kami.pipelines`' own `#{:none :alpha}` so a graph
+names a blend the same way that table does, and `test/graph_blend_test.clj`
+fails if the two drift.
+
+`:alpha` is straight (non-premultiplied) source-alpha over. An unknown mode
+throws rather than rendering opaque — a silently-ignored blend reads as a shader
+bug until someone finds the typo, the same failure the custom `:uniforms` path
+is guarded against. A pipeline declaring `:blend` with no `:color` target also
+throws.
+
+**No existing pipeline declares `:blend`**, so every graph in this repo builds a
+byte-identical descriptor to before. **Not verified on a real GPU**: no gate in
+this repo can drive a WebGPU device, so this ships proven only to the level of
+"the descriptor is constructed and nothing existing changed". The first caller to
+use it should confirm on hardware.
+
 ### Custom render graphs: caller-supplied uniforms, and SSAO tiering that stays out of their way (2026-08-03)
 
 Two changes that together let a domain package drive this executor with its own
