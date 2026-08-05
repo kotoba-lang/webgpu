@@ -778,6 +778,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                 :world-overlay (atom nil)
                 :gpu-errors gpu-errors
                 :device-loss device-loss
+                :frame-seq (atom 0)
                 :frame-evidence frame-evidence
                 :capture-presence capture-presence
                 :geometry-biomes geometry-biomes
@@ -962,7 +963,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
            geos instance-cache quality-resolution density-evidence lod-state lod-evidence post-evidence
            atmosphere-evidence ssao-evidence style-post-evidence frame-evidence foliage-evidence world-overlay
            capture-presence gpu-errors device-loss
-           render-bundle-cache]} ir]
+           render-bundle-cache frame-seq]} ir]
   (let [raw-instances (:instances ir)
         _ (some-> frame-evidence
                   (swap! (fn [e]
@@ -1148,7 +1149,8 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
     ;; name. Found via network-isekai's physical-gpu-probe once it was pointed at
     ;; a real Chrome instead of the bundled Chromium (which only ever gave
     ;; SwiftShader, where nothing checked GPU errors at all).
-    (let [enc (w3/create-command-encoder! device #js {:label "kami.frame"})
+    (let [fseq (swap! frame-seq inc)
+          enc (w3/create-command-encoder! device #js {:label (str "kami.frame#" fseq)})
           overlay-presence (volatile! nil)
           ninst (count insts)
           screen-view (w3/create-view (w3/current-texture ctx))
@@ -1206,7 +1208,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                   (set! (.-depthStencilAttachment pass-desc)
                         #js {:view (vw depth cascade) :depthLoadOp (if depth-load? "load" "clear")
                              :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}))
-              _ (set! (.-label pass-desc) (str "kami.pass/" pipeline))
+              _ (set! (.-label pass-desc) (str "kami.pass/" pipeline "@" fseq))
               rp (w3/begin-render-pass! enc pass-desc)]
           (when (not= false draw)
             (if fullscreen
