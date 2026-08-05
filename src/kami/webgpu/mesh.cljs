@@ -624,7 +624,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
     (if (= :webgl2 (:backend viewport))
       (webgl/render-mesh-frame! viewport buffers vp color)
   (let [
-        encoder (w3/create-command-encoder! device)
+        encoder (w3/create-command-encoder! device #js {:label "kami.mesh.upload"})
         pass (w3/begin-render-pass!
               encoder
               #js {:colorAttachments
@@ -651,7 +651,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
                           :mvp (m4-mul projection (model-matrix (or transform {})))}) draws)]
     (if (= :webgl2 (:backend viewport))
       (webgl/render-mesh-scene! viewport prepared)
-      (let [encoder (w3/create-command-encoder! device)
+      (let [encoder (w3/create-command-encoder! device #js {:label "kami.mesh.upload"})
             pass (w3/begin-render-pass!
                   encoder
                   #js {:colorAttachments
@@ -676,7 +676,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
         vp (m4-mul (view-projection eye target (/ width height)) (model-matrix (or transform {})))]
     (if (= :webgl2 (:backend viewport))
       (webgl/render-skinned-mesh-frame! viewport buffers vp color joint-matrices)
-      (let [encoder (w3/create-command-encoder! device)
+      (let [encoder (w3/create-command-encoder! device #js {:label "kami.mesh.upload"})
             pass (w3/begin-render-pass!
                   encoder #js {:colorAttachments #js [#js {:view (w3/create-view (w3/current-texture ctx))
                                                             :loadOp "clear" :storeOp "store"
@@ -941,7 +941,7 @@ fn fs(in: VertexOut) -> @location(0) vec4<f32> {
             (.bindBuffer gl (.-ARRAY_BUFFER gl) vertex-buffer)
             (.bufferSubData gl (.-ARRAY_BUFFER gl) 0 vertices)))
         (webgl/render-mesh-scene! viewport prepared))
-      (let [encoder (w3/create-command-encoder! device)
+      (let [encoder (w3/create-command-encoder! device #js {:label "kami.mesh.upload"})
             pass (w3/begin-render-pass!
                   encoder #js {:colorAttachments #js [#js {:view (w3/create-view (w3/current-texture ctx))
                                                            :loadOp "clear" :storeOp "store"

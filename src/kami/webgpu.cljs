@@ -1139,7 +1139,16 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
     (let [{:keys [buf grew?]} (ensure-inst-buffer! inst-buffer device (count insts))]
       (when (and grew? render-bundle-cache) (reset! render-bundle-cache {}))
       (when (or (not cache-hit?) grew?) (w3/write-buffer! queue buf 0 idata))
-    (let [enc (w3/create-command-encoder! device)
+    ;; Labelled on purpose. WebGPU validation errors name the objects involved,
+    ;; and on hardware the royale scene reports "[CommandEncoder (unlabeled)] is
+    ;; already finished. - While encoding BeginRenderPass" every frame — which
+    ;; cannot be acted on, because this renderer creates encoders in several
+    ;; places (here, and per-upload inside kami.webgpu.mesh) and "unlabeled"
+    ;; does not say which. A label costs nothing and turns that message into a
+    ;; name. Found via network-isekai's physical-gpu-probe once it was pointed at
+    ;; a real Chrome instead of the bundled Chromium (which only ever gave
+    ;; SwiftShader, where nothing checked GPU errors at all).
+    (let [enc (w3/create-command-encoder! device #js {:label "kami.frame"})
           overlay-presence (volatile! nil)
           ninst (count insts)
           screen-view (w3/create-view (w3/current-texture ctx))
@@ -1177,7 +1186,8 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                 (if (= signature (:signature cached))
                   (:bundle cached)
                   (let [encoder (w3/create-render-bundle-encoder!
-                                 device (clj->js bundle-descriptor))]
+                                 device (doto (clj->js bundle-descriptor)
+                                          (aset "label" (str "kami.bundle/" pipeline-key))))]
                     (draw-geom encoder pipe bnd)
                     (let [bundle (w3/finish-render-bundle! encoder)]
                       (swap! render-bundle-cache assoc pipeline-key
@@ -1196,6 +1206,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                   (set! (.-depthStencilAttachment pass-desc)
                         #js {:view (vw depth cascade) :depthLoadOp (if depth-load? "load" "clear")
                              :depthStoreOp "store" :depthClearValue (or clear-depth 1.0)}))
+              _ (set! (.-label pass-desc) (str "kami.pass/" pipeline))
               rp (w3/begin-render-pass! enc pass-desc)]
           (when (not= false draw)
             (if fullscreen
