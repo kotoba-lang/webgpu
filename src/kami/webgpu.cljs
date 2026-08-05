@@ -1229,7 +1229,11 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                                                 :color-format (if (= color :screen)
                                                                 fmt
                                                                 (get-in targets [color :format]))})]
-                (vreset! overlay-presence presence)))))
+                (vreset! overlay-presence presence))))))
+      ;; ONE finish + submit per frame. This used to sit inside the `doseq`,
+      ;; so the encoder was finished on the first pass and every later pass
+      ;; encoded into an already-finished encoder — invalid pass, invalid
+      ;; command buffer, invalid submit, once per pass per frame.
       (w3/submit! queue [(w3/finish! enc)])
       (some-> capture-presence
               (reset! (when-let [presence @overlay-presence]
@@ -1239,7 +1243,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                                 :submit-sequence (inc (get @frame-evidence :submits 0))
                                 :backend :webgpu
                                 :device-lost? false
-                                :gpu-error-count (count @gpu-errors)})))))
+                                :gpu-error-count (count @gpu-errors)}))))
       (some-> style-post-evidence (swap! assoc :pass-executed? style-pass? :submitted? true))
       (some-> frame-evidence
               (swap! (fn [e]
