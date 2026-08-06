@@ -2,6 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is run-tests]]
+            [kami.webgpu.ir :as ir]
             [kotoba.render.texture :as texture]))
 
 (deftest common-mip-chain-contract
@@ -20,16 +21,31 @@
     (is (str/includes? source ":dimension \"2d-array\""))
     (is (str/includes? source ":origin #js [0 0 layer]"))
     (is (str/includes? source "(double (inc texture-layer))"))
-    (is (str/includes? source "(def ^:private INST-FLOATS 32)"))
+    ;; The instance ABI moved out of this file into kami.webgpu.ir, so the
+    ;; literal `INST-FLOATS 32` is no longer here to scrape. Assert the property
+    ;; where it now lives, plus that the executor takes it from there rather than
+    ;; restating it — the same coverage, one indirection later.
+    (is (= 32 ir/instance-floats))
+    (is (str/includes? source "(def ^:private INST-FLOATS ir/instance-floats)"))
     (is (str/includes? source "(def ^:private INST-STRIDE (* 4 INST-FLOATS))"))
     (is (str/includes? source "[w h d] (ir/instance-size size)"))
     (is (str/includes? source "(aset idata (+ base 8) (* s d))"))
     (is (str/includes? source "(aset idata (+ base 10) (* c d))"))
     (is (str/includes? source "(model-mat pos (or yaw 0) w h d)"))
-    (is (str/includes? source "(vattr \"float32x4\" 96 10)"))
-    (is (str/includes? source "(vattr \"float32x4\" 112 13)"))
-    (is (str/includes? source "(vattr \"float32x3\" 48 11)"))
-    (is (str/includes? source "(vattr \"float32x3\" 60 12)"))
+    ;; Same relocation for the vertex attributes these pinned: uv-transform,
+    ;; layer indices, skin weights. They are entries of
+    ;; kami.webgpu.ir/default-vertex-layout now, not `(vattr …)` calls in this
+    ;; file, so match on the data. vertex-layout-test additionally pins the whole
+    ;; layout against the literals that were here before the move.
+    (let [attrs (set (for [buf ir/default-vertex-layout
+                           a (:attributes buf)]
+                       [(:format a) (:offset a) (:location a)]))]
+      (doseq [want [["float32x4" 96 10]     ;; uv transform
+                    ["float32x4" 112 13]    ;; per-instance layer indices
+                    ["float32x3" 48 11]     ;; skin weights
+                    ["float32x3" 60 12]]]   ;; mesh layer indices
+        (is (contains? attrs want)
+            (str "default-vertex-layout must still declare " want))))
     (is (str/includes? source "biome-weights"))
     (is (str/includes? source "(render-instance/normalize-uv-transform uv-transform)"))
     (is (str/includes? source ":dimension \"cube\""))

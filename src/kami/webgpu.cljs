@@ -357,7 +357,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
 ;; the same value so typical scenes (<16384 instances) still pay zero extra
 ;; buffer churn versus before this fix.
 (def ^:private INITIAL-INST-CAPACITY 16384)
-(def ^:private INST-FLOATS 32)
+(def ^:private INST-FLOATS ir/instance-floats)   ;; ABI lives in kami.webgpu.ir
 (def ^:private INST-STRIDE (* 4 INST-FLOATS))
 
 (defn- mk-inst-buffer [device capacity]
@@ -383,15 +383,28 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
         {:buf buf' :grew? true}))))
 
 (defn- vattr [fmt off loc] #js {:format fmt :offset off :shaderLocation loc})
-(defn- vlayout []   ;; mesh(pos+normal+uv+tangent+weights+layer indices, stride 72)
-  #js [#js {:arrayStride 72
-            :attributes #js [(vattr "float32x3" 0 0) (vattr "float32x3" 12 1)
-                             (vattr "float32x2" 24 8) (vattr "float32x4" 32 9)
-                             (vattr "float32x3" 48 11) (vattr "float32x3" 60 12)]}
-       #js {:arrayStride 128 :stepMode "instance"
-            :attributes #js [(vattr "float32x4" 0 2) (vattr "float32x4" 16 3) (vattr "float32x4" 32 4)
-                             (vattr "float32x4" 48 5) (vattr "float32x4" 64 6) (vattr "float32x4" 80 7)
-                             (vattr "float32x4" 96 10) (vattr "float32x4" 112 13)]}])
+(defn- vertex-buffers
+  "`kami.webgpu.ir` vertex-layout data -> the `#js` array `GPURenderPipeline`
+  wants. Refuses a layout with problems rather than handing it to the device:
+  a device rejects some of these outright, but a stride that disagrees with the
+  packer is *accepted* and renders geometry in the wrong place, which reads as a
+  shader bug until someone compares two numbers written 300 lines apart."
+  [layout]
+  (when-let [problems (ir/vertex-layout-problems layout)]
+    (throw (ex-info "invalid :vertex-layout" {:problems (vec problems) :layout layout})))
+  (->> layout
+       (map (fn [{:keys [stride step attributes]}]
+              (let [b #js {:arrayStride stride
+                           :attributes (->> attributes
+                                            (map (fn [{:keys [format offset location]}]
+                                                   (vattr format offset location)))
+                                            (apply array))}]
+                (when (= step :instance) (set! (.-stepMode b) "instance"))
+                b)))
+       (apply array)))
+
+(defn- vlayout []
+  (vertex-buffers ir/default-vertex-layout))
 
 ;; ── blend modes ────────────────────────────────────────────────────────────
 ;; The vocabulary is deliberately the same as `kami.pipelines`' :blend
@@ -422,7 +435,7 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
     (or (get blend-modes blend)
         (throw (ex-info "unknown :blend" {:blend blend :known (conj (vec (keys blend-modes)) :none)})))))
 
-(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen fragment blend]}]
+(defn- build-pipeline [device fmt shaders {:keys [shader cull depth color fullscreen fragment blend vertex-layout]}]
   (let [mod (w3/create-shader-module! device #js {:code (get shaders shader)})
         bs (blend-state blend)
         _ (when (and bs (not color))
@@ -430,7 +443,10 @@ fn ndecode(v:vec3<f32>)->vec3<f32>{ return normalize(v*2.0-1.0); }
                             {:shader shader :blend blend})))
         desc #js {:layout "auto"
                   :vertex #js {:module mod :entryPoint "vs"
-                               :buffers (if fullscreen #js [] (vlayout))}
+                               :buffers (cond
+                                          fullscreen #js []
+                                          (some? vertex-layout) (vertex-buffers vertex-layout)
+                                          :else (vlayout))}
                   :primitive #js {:cullMode (if fullscreen "none" (or cull "back"))}}]
     (when depth
       (set! (.-depthStencil desc)
