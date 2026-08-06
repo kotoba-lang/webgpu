@@ -297,3 +297,141 @@
        (sequential? (:instances ir))
        (every? (fn [i] (and (vector? (:pos i)) (vector? (:color i)) (vector? (:size i))))
                (:instances ir))))
+
+;; --- vertex layout --------------------------------------------------------
+;;
+;; The executor's vertex layout used to be a literal `#js` structure inside
+;; `kami.webgpu/vlayout`, which meant two things: no pipeline could declare its
+;; own layout (every pipeline got the mesh+instance pair or, for `:fullscreen`,
+;; nothing), and the instance buffer's byte stride was written as a bare `128`
+;; next to an `INST-FLOATS 32` that separately implied it. Raising the float
+;; count to add an instance attribute left the stride at 128, and nothing in the
+;; repo compared them — the pipeline would read the wrong bytes per instance,
+;; which shows up as geometry in the wrong place rather than as an error.
+;;
+;; Here the layout is data, the instance stride is *derived* from the float
+;; count, and [[vertex-layout-problems]] is a pure checker the JVM can run.
+;; `kami.webgpu` turns this into `#js` and refuses to build a pipeline whose
+;; layout has problems.
+
+(def vertex-formats
+  "WebGPU vertex formats this executor accepts, mapped to their byte size.
+   Deliberately not the full spec list: a format nobody packs is a typo, and
+   accepting it would let a layout claim a stride the packer never fills."
+  {"float32" 4 "float32x2" 8 "float32x3" 12 "float32x4" 16
+   "uint32" 4 "uint32x2" 8 "uint32x3" 12 "uint32x4" 16
+   "sint32" 4 "sint32x2" 8 "sint32x3" 12 "sint32x4" 16
+   "float16x2" 4 "float16x4" 8
+   "unorm8x2" 2 "unorm8x4" 4 "snorm8x2" 2 "snorm8x4" 4
+   "uint8x2" 2 "uint8x4" 4 "sint8x2" 2 "sint8x4" 4})
+
+(def instance-floats
+  "Floats per instance written by `kami.webgpu/pack-instance!`. The instance
+   buffer's stride is 4x this — the two must not be stated independently."
+  32)
+
+(def default-vertex-layout
+  "The mesh + instance pair every non-`:fullscreen` pipeline gets unless it
+   declares its own `:vertex-layout`. Shader locations are globally unique
+   across both buffers, as WebGPU requires."
+  [{:stride 72
+    :step :vertex
+    :attributes [{:format "float32x3" :offset 0 :location 0}    ;; position
+                 {:format "float32x3" :offset 12 :location 1}   ;; normal
+                 {:format "float32x2" :offset 24 :location 8}   ;; uv
+                 {:format "float32x4" :offset 32 :location 9}   ;; tangent
+                 {:format "float32x3" :offset 48 :location 11}  ;; skin weights
+                 {:format "float32x3" :offset 60 :location 12}]} ;; layer indices
+   {:stride (* 4 instance-floats)
+    :step :instance
+    :floats instance-floats
+    :attributes [{:format "float32x4" :offset 0 :location 2}     ;; model matrix
+                 {:format "float32x4" :offset 16 :location 3}
+                 {:format "float32x4" :offset 32 :location 4}
+                 {:format "float32x4" :offset 48 :location 5}
+                 {:format "float32x4" :offset 64 :location 6}    ;; colour
+                 {:format "float32x4" :offset 80 :location 7}    ;; material
+                 {:format "float32x4" :offset 96 :location 10}   ;; uv transform
+                 {:format "float32x4" :offset 112 :location 13}]}])
+
+(defn vertex-layout-problems
+  "Pure check of a `:vertex-layout` (a vector of buffer maps). Returns a vector
+   of `{:reason … }` problems, or `nil` when the layout is usable.
+
+   An empty layout is legal — that is what a `:fullscreen` pass wants. What is
+   not legal is a layout that a device would reject or, worse, accept while
+   reading bytes the packer never wrote:
+
+     :vertex-layout/not-sequential      the layout is not a sequence of buffers
+     :vertex-layout/bad-buffer          a buffer is not a map
+     :vertex-layout/bad-stride          stride missing, <= 0, or not a multiple of 4
+     :vertex-layout/bad-step            :step outside #{:vertex :instance}
+     :vertex-layout/no-attributes       a buffer declares no attributes
+     :vertex-layout/unknown-format      format outside [[vertex-formats]]
+     :vertex-layout/bad-offset          offset missing, negative, or not a multiple of 4
+     :vertex-layout/overflows-stride    offset + size > stride
+     :vertex-layout/bad-location        location missing or negative
+     :vertex-layout/duplicate-location  the same location in two places
+     :vertex-layout/stride-floats-drift :floats declared but stride != 4x it"
+  [layout]
+  (if-not (sequential? layout)
+    [{:reason :vertex-layout/not-sequential :layout layout}]
+    (let [problems
+          (into []
+                (comp
+                 (map-indexed vector)
+                 (mapcat
+                  (fn [[bi buf]]
+                    (if-not (map? buf)
+                      [{:reason :vertex-layout/bad-buffer :buffer bi :value buf}]
+                      (let [{:keys [stride step attributes floats]} buf]
+                        (concat
+                         (when-not (and (number? stride) (pos? stride)
+                                        (zero? (mod stride 4)))
+                           [{:reason :vertex-layout/bad-stride :buffer bi :stride stride}])
+                         (when (and (some? step) (not (#{:vertex :instance} step)))
+                           [{:reason :vertex-layout/bad-step :buffer bi :step step}])
+                         (when (and (some? floats)
+                                    (number? stride)
+                                    (not= stride (* 4 floats)))
+                           [{:reason :vertex-layout/stride-floats-drift :buffer bi
+                             :stride stride :floats floats :expected-stride (* 4 floats)}])
+                         (when-not (seq attributes)
+                           [{:reason :vertex-layout/no-attributes :buffer bi}])
+                         (mapcat
+                          (fn [{:keys [format offset location]}]
+                            (let [size (get vertex-formats format)]
+                              (concat
+                               (when-not size
+                                 [{:reason :vertex-layout/unknown-format :buffer bi
+                                   :format format}])
+                               (when-not (and (number? offset) (not (neg? offset))
+                                              (zero? (mod offset 4)))
+                                 [{:reason :vertex-layout/bad-offset :buffer bi
+                                   :offset offset}])
+                               (when (and size (number? offset) (number? stride)
+                                          (> (+ offset size) stride))
+                                 [{:reason :vertex-layout/overflows-stride :buffer bi
+                                   :offset offset :size size :stride stride}])
+                               (when-not (and (number? location) (not (neg? location)))
+                                 [{:reason :vertex-layout/bad-location :buffer bi
+                                   :location location}]))))
+                          attributes)))))))
+                layout)
+          locations (for [buf layout
+                          :when (map? buf)
+                          a (:attributes buf)]
+                      (:location a))
+          dupes (->> locations
+                     (filter number?)
+                     frequencies
+                     (keep (fn [[loc n]] (when (> n 1) loc)))
+                     sort)]
+      (seq (into problems
+                 (map (fn [loc] {:reason :vertex-layout/duplicate-location
+                                 :location loc}))
+                 dupes)))))
+
+(defn valid-vertex-layout?
+  [layout]
+  (nil? (vertex-layout-problems layout)))

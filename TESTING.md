@@ -7,18 +7,46 @@ surfaces. Repository-local tests focus on the CLJ/EDN contract:
 | Surface | How it runs the interpreters | Test command |
 |---|---|---|
 | **web** | CLJS → WebGPU / DOM (`kami.webgpu`, `kami.ui`, …) | in-browser (isekai.network) |
-| **JVM** | babashka loads the `.cljc` directly | `bb test` |
+| **JVM** | `clojure -M:test` loads the `.cljc` directly | `clojure -M:test` |
 
 ## Commands
 
 ```bash
-bb test       # JVM: the .cljc interpreters (8 tests / 42 assertions — examples + properties)
-bb verify     # repository-local surfaces: bb test + real-binary format gates
+clojure -M:test                              # all namespaces on the test path
+clojure -M:test -n vertex-layout-test        # one namespace
+clojure -M:test -r '^(?!playwright).*-test$' # everything that needs no browser
 ```
 
-CI (`.github/workflows/test.yml`) runs `bb test` on every push — the fast,
-GPU-free correctness gate. Native adapters should consume this repo's EDN
-contracts from their own repositories.
+**This used to say `bb test` / `bb verify`, and neither exists here** — there is
+no `bb.edn` in this repo, and `bb` is retired as a script host workspace-wide
+(ADR-2607173000). The `:test` alias in `deps.edn` is also what the murakumo
+fleet's `:jvm-test` gate requires, so wiring it is what makes this repo gateable
+at all; the GitHub Actions workflow the old text pointed at was removed with
+every other one (ADR-2607300900).
+
+## Known-red namespaces (as of 2026-08-06)
+
+Two fail for reasons predating this alias — they went unnoticed precisely
+because nothing could run them:
+
+| Namespace | State |
+|---|---|
+| `compute-golden-test` | wants `kami.cartpole-math`, but `kotoba-lang/cartpole-math` now ships `kotoba/cartpole_math.kotoba` — the namespace it requires no longer exists |
+| `pipeline-specs-test` | shells to `bb scripts/gen_pipeline_specs.clj`, which fails at its `require` of `kami.pipelines`: `bb` does not resolve this repo's `deps.edn` (see the note in `nbb.edn`). Same root cause as the stale `bb test` above |
+| `cascade-shadow-test` | skips itself when `naga` is not installed (0 assertions) |
+
+Everything else is green:
+
+```bash
+clojure -M:test -r '^(?!playwright|compute-golden|pipeline-specs).*-test$'
+clojure -M:test -n playwright-vertex-layout-test   # real WebGPU, needs Chrome
+```
+
+`atmosphere-graph-test` was a third: it asserted a hardcoded count of HDR graphs
+and went red when a third one was added *correctly*. It now asserts the property
+instead. Because these namespaces `throw` on failure, one red namespace aborts
+every namespace after it — a full-suite run is only meaningful once they are
+addressed.
 
 ## What's asserted
 
