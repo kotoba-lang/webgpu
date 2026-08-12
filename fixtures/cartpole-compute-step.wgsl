@@ -1,4 +1,4 @@
-// kami.wgsl emitted shader: cartpole_step
+// kami.wgsl-emit emitted shader: cartpole_step
 struct State {
   x: f32,
   x_dot: f32,
