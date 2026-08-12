@@ -8,27 +8,30 @@
 ;;      where the output state is computed by the pure-CLJC mirror in `kami.cartpole-math`.
 ;;
 ;; Regenerate both, then assert `git diff --exit-code` is clean — the same "single source, no drift"
-;; guarantee `gen_wgsl.clj` gives the lit/shadow shaders. The committed fixtures are what `bb test`
-;; (compute-golden test) asserts against, so a divergence in EITHER the emitter OR the math fails
+;; guarantee `gen_wgsl.clj` gives the lit/shadow shaders. The committed fixtures are what the
+;; compute-golden test asserts against, so a divergence in EITHER the emitter OR the math fails
 ;; its test instead of drifting silently.
 ;;
-;; This script is run by the `bb gen-compute-golden` task with a classpath that puts the kami-engine
-;; SDK FIRST so its `kami.wgsl` (the high-level `emit`/`emit-compute-stage` API) resolves — kami-webgpu
-;; ships a different, low-level `kami.wgsl`, so the SDK must win on this process's classpath:
+;; Run it as:
 ;;
-;;   bb --classpath ../kami-engine/kami-engine-sdk-clj/src:src -f scripts/gen_compute_golden.clj
+;;   nbb scripts/run-task.cljs gen-compute-golden     ; == clojure -M:gen-compute-golden
 ;;
-;; (`--classpath` overrides bb.edn `:paths`, so kami-webgpu's `src` is still available for
-;; `kami.cartpole-math`, but the SDK's `kami.wgsl` is found first for `kami.physics-compute`.)
+;; The `:gen-compute-golden` alias in deps.edn supplies the two sibling repos this script needs as
+;; `:local/root` deps rather than as a hand-written `--classpath` string, because the hand-written
+;; one had gone stale in two independent ways and nothing announced it (ADR-2608135000):
+;;   * `kami.cartpole-math` was extracted out of this repo into kotoba-lang/cartpole-math, so the
+;;     old classpath's `src` no longer resolved it at all — the very first require failed.
+;;   * the SDK was extracted out of kotoba-lang/kami-engine into kotoba-lang/kami-engine-sdk (west
+;;     path `orgs/kotoba-lang/kami-engine-sdk`), so `../kami-engine/kami-engine-sdk-clj/src` names a
+;;     directory that no longer exists.
+;; Declaring both as deps means the layout is stated once, in deps.edn, and `clojure` reports a
+;; missing sibling itself instead of this script guessing at a path.
 (ns gen-compute-golden
   (:require [kami.cartpole-math :as cm]
             [kami.physics-compute :as pc]
             [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]))
-
-(def ^:private sdk-root
-  "../kami-engine/kami-engine-sdk-clj/src/kami/physics_compute.cljc")
 
 (def ^:private wgsl-fixture  "fixtures/cartpole-compute-step.wgsl")
 (def ^:private golden-fixture "fixtures/cartpole-compute-golden.json")
@@ -37,11 +40,18 @@
   (binding [*out* *err*] (println msg))
   (System/exit 1))
 
-(when-not (.exists (io/file sdk-root))
+;; Presence check by CLASSPATH, not by relative file path: the previous guard hard-coded
+;; "../kami-engine/kami-engine-sdk-clj/src/kami/physics_compute.cljc" and so encoded one particular
+;; checkout layout, which stopped being true when the SDK moved to its own repo. Asking the
+;; classpath asks the question that actually matters — can this process load the namespace — and
+;; keeps working wherever the dependency comes from.
+(when-not (io/resource "kami/physics_compute.cljc")
   (exit!
-    (str "gen-compute-golden: kami-engine SDK not found at " sdk-root "\n"
-         "  This script needs the sibling `kami-engine` repo for `kami.physics-compute/cartpole-step-emit`.\n"
-         "  Run `west update --fetch smart kami-engine` (or clone kotoba-lang/kami-engine beside this repo) and retry.")))
+    (str "gen-compute-golden: kami.physics-compute is not on the classpath.\n"
+         "  This script needs kotoba-lang/kami-engine-sdk (west path orgs/kotoba-lang/kami-engine-sdk)\n"
+         "  and kotoba-lang/cartpole-math, both declared as :local/root deps of the\n"
+         "  :gen-compute-golden alias in deps.edn and therefore expected as SIBLINGS of this repo.\n"
+         "  Run `west update --fetch smart kami-engine-sdk cartpole-math` and retry.")))
 
 ;; --- 1. emit the WGSL kernel string (the @compute stage the GPU would run) ----------------
 (let [wgsl (str (pc/cartpole-step-emit) "\n")]
@@ -68,7 +78,7 @@
                "source"                "kami.cartpole-math/canonical-step + kami.physics-compute/cartpole-step-emit"
                "note"                  (str "Phase 3.1 (ADR-2607010930): pins the cartpole semi-implicit Euler "
                                             "math (CLJC mirror) and the emitted WGSL string. Regenerate with "
-                                            "`bb gen-compute-golden`; assert no drift with `git diff --exit-code`.")}]
+                                            "`nbb scripts/run-task.cljs gen-compute-golden`; assert no drift with `git diff --exit-code`.")}]
   (io/make-parents (io/file golden-fixture))
   (spit golden-fixture (json/generate-string golden {:pretty true}))
   (println (format "  ✓ wrote %s" golden-fixture))
@@ -77,5 +87,5 @@
   (println (format "    output-hash   %s" (get golden "expected-output-hash"))))
 
 (println "── compute-golden — kami.cartpole-math + kami.physics-compute single source ──")
-(println "  regenerate: bb gen-compute-golden")
-(println "  no-drift:   bb gen-compute-golden && git diff --exit-code")
+(println "  regenerate: nbb scripts/run-task.cljs gen-compute-golden")
+(println "  no-drift:   nbb scripts/run-task.cljs gen-compute-golden && git diff --exit-code")
