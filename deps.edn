@@ -44,7 +44,7 @@
          io.github.kotoba-lang/playwright {:git/url "https://github.com/kotoba-lang/playwright.git"
                                      :git/sha "8728bb95c3cbb8e87096bd8aacec8f0f32562e69"}
          io.github.kotoba-lang/cartpole-math {:git/url "https://github.com/kotoba-lang/cartpole-math.git"
-                                     :git/sha "7c6cb3076689165b9aa63487e39ef119841beca4"}}
+                                     :git/sha "e03723e91d2f43a682e3aeae932a4ffcbd53d067"}}
  :aliases
  {:test {:extra-paths ["test" "fixtures"]
          :extra-deps {io.github.cognitect-labs/test-runner
