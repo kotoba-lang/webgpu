@@ -128,7 +128,7 @@
 ;; Reinhard tonemap + gamma. PBR material (metallic/roughness/emissive) is per-instance EDN.
 ;; the ENTIRE shader is generated from data (kami.shaders/lit-shader via kami.wgsl): struct G,
 ;; uniform + shadow-map bindings, the PCF shadow fn, the VO varyings, the vertex and the fragment.
-;; A bb token-equivalence gate (test/shader_test.clj) pins the generated WGSL to the on-screen-
+;; A bb token-equivalence gate (test/shader_test.cljk) pins the generated WGSL to the on-screen-
 ;; verified original — identical token stream; only redundant grouping parens differ (always valid).
 (def SHADER (shaders/cascaded-textured-hdr-shader))
 

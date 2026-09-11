@@ -24,7 +24,7 @@
             [kotoba.lang.text :as str]
             [kami.pipelines :as pl]))
 
-(def executor "src/kami/webgpu.cljs")
+(def executor "src/kami/webgpu.cljk")
 
 (defn- declared-blend-modes
   "Keys of the `blend-modes` map in the executor source, as keywords.

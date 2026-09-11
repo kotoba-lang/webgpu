@@ -20,7 +20,7 @@
   (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is run-tests testing]]))
 
-(def executor "src/kami/webgpu.cljs")
+(def executor "src/kami/webgpu.cljk")
 (def source (slurp executor))
 
 (defn pass-lists

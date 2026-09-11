@@ -4,7 +4,7 @@
             [clojure.test :refer [deftest is run-tests]]))
 
 (deftest presence-is-stamped-only-after-submit-and-cleared-per-frame
-  (let [source (slurp (io/file "src/kami/webgpu.cljs"))
+  (let [source (slurp (io/file "src/kami/webgpu.cljk"))
         submit (.indexOf source "(w3/submit! queue")
         stamp (.indexOf source ":kotoba.webgpu/capture-presence-evidence-v2" submit)]
     (is (<= 0 submit))
@@ -15,7 +15,7 @@
     (is (str/includes? source ":capture-presence (some-> ctx :capture-presence deref)"))))
 
 (deftest skinned-presence-carries-provenance-without-pixel-readback
-  (let [source (slurp (io/file "src/kami/webgpu/mesh.cljs"))]
+  (let [source (slurp (io/file "src/kami/webgpu/mesh.cljk"))]
     (is (str/includes? source ":entity-ids"))
     (is (str/includes? source ":submitted-roles"))
     (is (str/includes? source ":projected-screen-bounds"))

@@ -2,7 +2,7 @@
   (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is run-tests]]))
 
-(def source (slurp "src/kami/webgpu.cljs"))
+(def source (slurp "src/kami/webgpu.cljk"))
 
 (deftest data-driven-ssao-is-preserved-in-both-post-tiers
   (is (str/includes? source ":ssao (shaders/ssao-shader)"))

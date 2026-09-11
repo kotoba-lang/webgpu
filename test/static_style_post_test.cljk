@@ -3,7 +3,7 @@
             [clojure.test :refer [deftest is run-tests]]
             [kami.webgpu.render-style :as style]))
 
-(def source (slurp "src/kami/webgpu.cljs"))
+(def source (slurp "src/kami/webgpu.cljk"))
 
 (def canonical
   {:contract :kotoba.render/style-v1 :profile :stylized

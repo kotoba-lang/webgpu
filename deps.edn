@@ -69,5 +69,5 @@
                   cheshire/cheshire {:mvn/version "5.13.0"}
                   io.github.kotoba-lang/kami-engine-sdk {:local/root "../kami-engine-sdk"}
                   io.github.kotoba-lang/cartpole-math {:local/root "../cartpole-math"}}
-   :main-opts ["scripts/gen_compute_golden.clj"]}}
+   :main-opts ["scripts/gen_compute_golden.cljk"]}}
 }

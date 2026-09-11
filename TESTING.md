@@ -32,7 +32,7 @@ because nothing could run them:
 | Namespace | State |
 |---|---|
 | `compute-golden-test` | wants `kami.cartpole-math`, but `kotoba-lang/cartpole-math` now ships `kotoba/cartpole_math.kotoba` — the namespace it requires no longer exists |
-| `pipeline-specs-test` | shells to `bb scripts/gen_pipeline_specs.clj`, which fails at its `require` of `kami.pipelines`: `bb` does not resolve this repo's `deps.edn` (see the note in `nbb.edn`). Same root cause as the stale `bb test` above |
+| `pipeline-specs-test` | shells to `bb scripts/gen_pipeline_specs.cljk`, which fails at its `require` of `kami.pipelines`: `bb` does not resolve this repo's `deps.edn` (see the note in `nbb.edn`). Same root cause as the stale `bb test` above |
 | `cascade-shadow-test` | skips itself when `naga` is not installed (0 assertions) |
 
 Everything else is green:

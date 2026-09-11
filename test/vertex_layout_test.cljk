@@ -68,7 +68,7 @@
   (testing "and it is *written* as the derivation, not as a literal that happens
             to equal it today — 128 == 4x32 is true until someone changes 32, and
             a value assertion cannot tell the two spellings apart"
-    (is (str/includes? (slurp "src/kami/webgpu/ir.cljc")
+    (is (str/includes? (slurp "src/kami/webgpu/ir.cljk")
                        ":stride (* 4 instance-floats)")
         "default-vertex-layout's instance stride must be derived from instance-floats")))
 
@@ -126,7 +126,7 @@
 
 ;; --- 3. the executor cannot restate the ABI --------------------------------
 
-(def executor "src/kami/webgpu.cljs")
+(def executor "src/kami/webgpu.cljk")
 
 (deftest executor-derives-the-instance-abi-from-ir
   (let [src (slurp executor)]
