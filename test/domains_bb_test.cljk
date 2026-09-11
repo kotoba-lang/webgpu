@@ -1,6 +1,6 @@
 ;; CLJ-side unit tests for the .cljc domain interpreters — the *same* source the web (CLJS)
 ;; and native (kotoba-clj→WASM) run. Verifies cross-platform correctness on the JVM via
-;; babashka:  bb --classpath src test/domains_bb_test.clj
+;; babashka:  bb --classpath src test/domains_bb_test.cljk
 (require '[kami.fsm :as fsm]
          '[kami.physics :as phys]
          '[kami.netsync :as net]

@@ -76,8 +76,8 @@ The render-IR is **data, not code** — exactly like hiccup's `[:div …]`. That
 
 | File | Platform | Role |
 |---|---|---|
-| `src/kami/webgpu/ir.cljc` | CLJ + CLJS | render-IR shape + pure constructors (the data layer) |
-| `src/kami/webgpu.cljs`    | browser    | the WebGPU executor — `init!` / `draw!` |
+| `src/kami/webgpu/ir.cljk` | CLJ + CLJS | render-IR shape + pure constructors (the data layer) |
+| `src/kami/webgpu.cljk`    | browser    | the WebGPU executor — `init!` / `draw!` |
 
 The heavy rasterization is the GPU's; CLJS only records light per-frame commands.
 
@@ -97,7 +97,7 @@ the WebGPU JS method names must not be renamed.
 
 The shader's look used to be baked-in constants; it is now **data** under the frame's
 `:globals`. Every key is optional — omit it and the executor merges `kami.webgpu.ir`'s
-defaults, which reproduce the original render byte-for-byte (pinned by `test/render_ir_test.clj`).
+defaults, which reproduce the original render byte-for-byte (pinned by `test/render_ir_test.cljk`).
 
 | `[:globals …]` key | what it controls | merged over |
 |---|---|---|

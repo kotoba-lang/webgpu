@@ -5,7 +5,7 @@
             [babashka.process :as p]))
 
 (deftest generated-edn-in-sync-with-source
-  (let [{:keys [exit out]} (p/sh "bb" "scripts/gen_pipeline_specs.clj" "--strict")]
+  (let [{:keys [exit out]} (p/sh "bb" "scripts/gen_pipeline_specs.cljk" "--strict")]
     (println (str/trim out))
     (is (zero? exit) "fixtures/pipeline_specs.edn differs from kami.pipelines; run `bb gen-pipeline-specs --write`")))
 

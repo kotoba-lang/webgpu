@@ -15,7 +15,7 @@
            levels))))
 
 (deftest webgpu-host-uploads-and-samples-mips
-  (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
+  (let [source (slurp (io/file "src/kami/webgpu.cljk"))]
     (is (str/includes? source ":mipLevelCount mip-level-count"))
     (is (str/includes? source ":mipLevel level"))
     (is (str/includes? source ":dimension \"2d-array\""))
@@ -58,7 +58,7 @@
     (is (str/includes? source ":maxAnisotropy 8"))))
 
 (deftest fallback-adapter-uses-explicit-solid-albedo-compatibility-policy
-  (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
+  (let [source (slurp (io/file "src/kami/webgpu.cljk"))]
     (is (str/includes? source "(when (:software-adapter? adapter-info) :solid-albedo)"))
     (is (str/includes? source ":adapter-reported-fallback"))
     (is (str/includes? source ":software-identity"))
@@ -69,7 +69,7 @@
     (is (str/includes? source ":material-texture-policy (:material-texture-policy ctx)"))))
 
 (deftest foliage-host-wires-cutout-wind-and-depth-fragments
-  (let [source (slurp (io/file "src/kami/webgpu.cljs"))]
+  (let [source (slurp (io/file "src/kami/webgpu.cljk"))]
     (is (str/includes? source "render-foliage/gpu-instance"))
     (is (str/includes? source "cascaded-foliage-shadow-shader"))
     (is (str/includes? source ":masked-instance-count"))

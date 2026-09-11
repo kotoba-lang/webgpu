@@ -2,7 +2,7 @@
   (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is run-tests]]))
 
-(def source (slurp "src/kami/webgpu/mesh.cljs"))
+(def source (slurp "src/kami/webgpu/mesh.cljk"))
 
 (deftest shader-and-cpu-layout-share-the-stylized-contract
   (doseq [token ["shade_color: vec4<f32>" "rim_color: vec4<f32>"

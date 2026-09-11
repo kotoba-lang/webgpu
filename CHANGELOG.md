@@ -19,7 +19,7 @@ See ADR-2608040400.
 
 A pipeline may now declare `:blend :alpha`; `:none` and absent stay opaque. The
 vocabulary is deliberately `kami.pipelines`' own `#{:none :alpha}` so a graph
-names a blend the same way that table does, and `test/graph_blend_test.clj`
+names a blend the same way that table does, and `test/graph_blend_test.cljk`
 fails if the two drift.
 
 `:alpha` is straight (non-premultiplied) source-alpha over. An unknown mode
@@ -143,7 +143,7 @@ carried a duplicate of a namespace that also lives here (`kami.sprite-gpu`, `kam
   `src/kami/webgl.cljs` → `src/kami/webgl.cljc` (adds the `:clj` branch, verbatim-ported from
   `kotoba.webgl`'s), `src/kami/webgl/glsl.cljs` → `src/kami/webgl/glsl.cljc` (pure data, no
   reader-conditional needed — its content was already byte-identical between the two repos), and a
-  new `test/webgl_test.clj` (ported from the standalone repo's) wired into `bb test`, giving
+  new `test/webgl_test.cljk` (ported from the standalone repo's) wired into `bb test`, giving
   `kami.webgl` JVM coverage it never had. This also matches this repo's own stated design
   philosophy ("A `.cljc`-first library", per `deps.edn`'s header comment). `kotoba-lang/webgl`'s
   `kotoba.webgl` is now, in turn, a thin re-export of this (now at-parity) namespace.
@@ -195,7 +195,7 @@ directly. See each affected repo's own README/CHANGELOG for its side of this.
   `:size`) — a `[:rect {:w 100 :h 50}]` rendered at ~200×100px instead of ~100×50px. Fixed by
   halving `:w`/`:h` in `prim->quad`; `:r`/`:rx`/`:ry` (circle/ellipse/arc) were already radii
   (= half-extents) and needed no change. New pixel-verified regression test
-  (`test/playwright_rect_extent_test.clj`, wired into `bb render-test`) renders the probe in a
+  (`test/playwright_rect_extent_test.cljk`, wired into `bb render-test`) renders the probe in a
   real headless WebGL2 browser and measures its on-screen bounding box; confirmed it fails
   against the pre-fix code (measured ~200×100px) and passes against the fix (~100×50px).
   Investigated before fixing: no scene in this repo or in `gftdcojp/network-isekai`'s
