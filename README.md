@@ -29,7 +29,7 @@ effect instead of silently treating a requested quality tier as rendered.
 > `:local/root` 依存（`kotoba.expr`）へ置き換えた。あわせて、その孤児 DSL 群
 > だけを実バイナリ検証していた `scripts/format_gate.clj`（+ その専用
 > validator `gltf_validate.js`/`graphql_validate.js`）も削除（`gate`/`verify`
-> bb task から除去）。`gen_glsl.clj`/`gen_wgsl.clj`/`gen_pipeline_specs.clj`/
+> kbb -M:task から除去）。`gen_glsl.clj`/`gen_wgsl.clj`/`gen_pipeline_specs.clj`/
 > `fixtures/glsl`/`fixtures/pipeline_specs.edn` は `kami.wgsl`/`kami.shaders`/
 > `kami.pipelines`（= このrepo自身のドメイン）に実際に使われているため維持。
 > executor 本体は `org-w3-webgpu` 分離（Phase 2、`kami/webgpu.cljs` は

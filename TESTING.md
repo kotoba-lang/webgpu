@@ -7,17 +7,17 @@ surfaces. Repository-local tests focus on the CLJ/EDN contract:
 | Surface | How it runs the interpreters | Test command |
 |---|---|---|
 | **web** | CLJS → WebGPU / DOM (`kami.webgpu`, `kami.ui`, …) | in-browser (isekai.network) |
-| **JVM** | `clojure -M:test` loads the `.cljc` directly | `clojure -M:test` |
+| **JVM** | `kbb -M:test` loads the `.cljc` directly | `kbb -M:test` |
 
 ## Commands
 
 ```bash
-clojure -M:test                              # all namespaces on the test path
-clojure -M:test -n vertex-layout-test        # one namespace
-clojure -M:test -r '^(?!playwright).*-test$' # everything that needs no browser
+kbb -M:test                              # all namespaces on the test path
+kbb -M:test -n vertex-layout-test        # one namespace
+kbb -M:test -r '^(?!playwright).*-test$' # everything that needs no browser
 ```
 
-**This used to say `bb test` / `bb verify`, and neither exists here** — there is
+**This used to say `kbb -M:test` / `kbb -M:verify`, and neither exists here** — there is
 no `bb.edn` in this repo, and `bb` is retired as a script host workspace-wide
 (ADR-2607173000). The `:test` alias in `deps.edn` is also what the murakumo
 fleet's `:jvm-test` gate requires, so wiring it is what makes this repo gateable
@@ -32,14 +32,14 @@ because nothing could run them:
 | Namespace | State |
 |---|---|
 | `compute-golden-test` | wants `kami.cartpole-math`, but `kotoba-lang/cartpole-math` now ships `kotoba/cartpole_math.kotoba` — the namespace it requires no longer exists |
-| `pipeline-specs-test` | shells to `bb scripts/gen_pipeline_specs.cljk`, which fails at its `require` of `kami.pipelines`: `bb` does not resolve this repo's `deps.edn` (see the note in `nbb.edn`). Same root cause as the stale `bb test` above |
+| `pipeline-specs-test` | shells to `kbb scripts/gen_pipeline_specs.cljk`, which fails at its `require` of `kami.pipelines`: `bb` does not resolve this repo's `deps.edn` (see the note in `nbb.edn`). Same root cause as the stale `kbb -M:test` above |
 | `cascade-shadow-test` | skips itself when `naga` is not installed (0 assertions) |
 
 Everything else is green:
 
 ```bash
-clojure -M:test -r '^(?!playwright|compute-golden|pipeline-specs).*-test$'
-clojure -M:test -n playwright-vertex-layout-test   # real WebGPU, needs Chrome
+kbb -M:test -r '^(?!playwright|compute-golden|pipeline-specs).*-test$'
+kbb -M:test -n playwright-vertex-layout-test   # real WebGPU, needs Chrome
 ```
 
 `atmosphere-graph-test` was a third: it asserted a hardcoded count of HDR graphs
