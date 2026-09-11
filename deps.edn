@@ -59,7 +59,7 @@
          :exec-fn cognitect.test-runner.api/test}
 
   ;; Regenerate fixtures/cartpole-compute-{step.wgsl,golden.json}. Replaces the retired
-  ;; `bb --classpath …` invocation (ADR-2607173000 retired babashka; ADR-2608135000 converted this
+  ;; `kbb --classpath …` invocation (ADR-2607173000 retired babashka; ADR-2608135000 converted this
   ;; task, which had survived as an nbb registry entry that shelled straight back out to `bb`).
   ;; :replace-deps, not :extra-deps — the script needs exactly kami.physics-compute and
   ;; kami.cartpole-math, and resolving this repo's ~20 sibling git deps to run one generator is

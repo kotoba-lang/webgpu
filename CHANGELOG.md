@@ -108,7 +108,7 @@ Measured improvement (same benchmark, same machine, before → after): 5,000 ins
 `MAX-INST` 16,384) 36.3ms→1.03ms/frame — roughly a 30-40× reduction in per-frame cost at
 the high end, confirmed by re-running the existing `kami-app-amenominaka` M2 real-browser
 smoke test (`test/render/verify_m2_render.cljs`) unchanged and getting the identical
-correct screenshot. `bb test`'s existing `.cljc` suite (unaffected — this change is
+correct screenshot. `kbb -M:test`'s existing `.cljc` suite (unaffected — this change is
 `.cljs`-only) stays green throughout.
 
 Note this closes the *actual* wall ADR-2607100100 M4 investigated — a redundant re-upload,
@@ -143,7 +143,7 @@ carried a duplicate of a namespace that also lives here (`kami.sprite-gpu`, `kam
   `src/kami/webgl.cljs` → `src/kami/webgl.cljc` (adds the `:clj` branch, verbatim-ported from
   `kotoba.webgl`'s), `src/kami/webgl/glsl.cljs` → `src/kami/webgl/glsl.cljc` (pure data, no
   reader-conditional needed — its content was already byte-identical between the two repos), and a
-  new `test/webgl_test.cljk` (ported from the standalone repo's) wired into `bb test`, giving
+  new `test/webgl_test.cljk` (ported from the standalone repo's) wired into `kbb -M:test`, giving
   `kami.webgl` JVM coverage it never had. This also matches this repo's own stated design
   philosophy ("A `.cljc`-first library", per `deps.edn`'s header comment). `kotoba-lang/webgl`'s
   `kotoba.webgl` is now, in turn, a thin re-export of this (now at-parity) namespace.
@@ -180,10 +180,10 @@ directly. See each affected repo's own README/CHANGELOG for its side of this.
   matches the web's xorshift sequence — same EDN → same world.
 
 ### Tests
-- `bb test` — the `.cljc` interpreters on the JVM (examples + properties; 8 tests / 42 assertions).
-- `bb verify` / superproject `scripts/verify-clj-everywhere.sh` — all surfaces in one command
+- `kbb -M:test` — the `.cljc` interpreters on the JVM (examples + properties; 8 tests / 42 assertions).
+- `kbb -M:verify` / superproject `scripts/verify-clj-everywhere.sh` — all surfaces in one command
   (JVM + native WASM + native renderer).
-- CI: GitHub Actions runs `bb test` on every push.
+- CI: GitHub Actions runs `kbb -M:test` on every push.
 - Bug found via coverage work and fixed upstream: kotoba-clj `into` overflowed when the dst was
   at exact capacity (a vector literal); now returns a correctly-sized new vector.
 - **Bug fixed: `kami.sprite-gpu/prim->quad`'s `:rect` case doubled the rendered width/height.**
@@ -195,7 +195,7 @@ directly. See each affected repo's own README/CHANGELOG for its side of this.
   `:size`) — a `[:rect {:w 100 :h 50}]` rendered at ~200×100px instead of ~100×50px. Fixed by
   halving `:w`/`:h` in `prim->quad`; `:r`/`:rx`/`:ry` (circle/ellipse/arc) were already radii
   (= half-extents) and needed no change. New pixel-verified regression test
-  (`test/playwright_rect_extent_test.cljk`, wired into `bb render-test`) renders the probe in a
+  (`test/playwright_rect_extent_test.cljk`, wired into `kbb -M:render-test`) renders the probe in a
   real headless WebGL2 browser and measures its on-screen bounding box; confirmed it fails
   against the pre-fix code (measured ~200×100px) and passes against the fix (~100×50px).
   Investigated before fixing: no scene in this repo or in `gftdcojp/network-isekai`'s

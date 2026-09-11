@@ -35,25 +35,25 @@ reason; callers may explicitly override it with
 
 ## Shader language: one EDN → WGSL + GLSL
 
-`bb gen-glsl` lowers each EDN shader to WGSL (kami.wgsl) and lets **naga** (wgpu's frontend) transpile
+`kbb -M:gen-glsl` lowers each EDN shader to WGSL (kami.wgsl) and lets **naga** (wgpu's frontend) transpile
 WGSL → **GLSL ES 3.00** (WebGL2) — naga handles type inference, std140 layout, `@location→in/out`,
 `@builtin→gl_*`, `textureSample→texture`. So one source feeds WGSL (WebGPU/Metal/console) **and** GLSL
 (WebGL2). Compute shaders don't cross to WebGL2 (no compute there) — gated by `kami.gpu :requires`.
 
 ## Single source, web ↔ native
 
-`bb gen-wgsl` writes the canonical WGSL to the native crates (`kami-webgpu-rs`, `kami-render`), which
-`include_str!` it; `bb wgsl-parity` gates that the committed `.wgsl` stays token-equivalent to the EDN.
+`kbb -M:gen-wgsl` writes the canonical WGSL to the native crates (`kami-webgpu-rs`, `kami-render`), which
+`include_str!` it; `kbb -M:wgsl-parity` gates that the committed `.wgsl` stays token-equivalent to the EDN.
 The lit shader's `light_a..d` tunables + the 16 open-world shaders are all single-sourced this way.
 
 ## Verification (run in CI)
 
-- `bb test` — the EDN/shader/GPU-IR gates (geometry golden, wgsl, render-shader token-equivalence,
+- `kbb -M:test` — the EDN/shader/GPU-IR gates (geometry golden, wgsl, render-shader token-equivalence,
   capability resolution, sprite-gpu).
 - `naga` — every generated WGSL/GLSL is validated by wgpu's own frontend.
-- `bb webgl-test` — the generated GLSL **links** in a real headless WebGL2 browser (playwright-clj).
-- `bb render-test` — the GPU-2D sprite-SDF pass **draws** (pixel readback: a red disc + a green block).
-- `bb wgsl-parity` / `bb wit-check` — single-source drift gates. All run on every push/PR (GitHub Actions).
+- `kbb -M:webgl-test` — the generated GLSL **links** in a real headless WebGL2 browser (playwright-clj).
+- `kbb -M:render-test` — the GPU-2D sprite-SDF pass **draws** (pixel readback: a red disc + a green block).
+- `kbb -M:wgsl-parity` / `kbb -M:wit-check` — single-source drift gates. All run on every push/PR (GitHub Actions).
 
 ## Status
 

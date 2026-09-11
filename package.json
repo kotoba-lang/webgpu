@@ -5,7 +5,7 @@
     "playwright": "^1.61.1"
   },
   "scripts": {
-    "task": "nbb scripts/run-task.cljk",
-    "tasks": "nbb scripts/run-task.cljk"
+    "task": "kbb --backend sci scripts/run-task.cljk",
+    "tasks": "kbb --backend sci scripts/run-task.cljk"
   }
 }

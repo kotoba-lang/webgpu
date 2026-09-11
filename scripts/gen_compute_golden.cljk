@@ -14,7 +14,7 @@
 ;;
 ;; Run it as:
 ;;
-;;   nbb scripts/run-task.cljk gen-compute-golden     ; == clojure -M:gen-compute-golden
+;;   kbb --backend sci scripts/run-task.cljk gen-compute-golden     ; == kbb -M:gen-compute-golden
 ;;
 ;; The `:gen-compute-golden` alias in deps.edn supplies the two sibling repos this script needs as
 ;; `:local/root` deps rather than as a hand-written `--classpath` string, because the hand-written
@@ -78,7 +78,7 @@
                "source"                "kami.cartpole-math/canonical-step + kami.physics-compute/cartpole-step-emit"
                "note"                  (str "Phase 3.1 (ADR-2607010930): pins the cartpole semi-implicit Euler "
                                             "math (CLJC mirror) and the emitted WGSL string. Regenerate with "
-                                            "`nbb scripts/run-task.cljk gen-compute-golden`; assert no drift with `git diff --exit-code`.")}]
+                                            "`kbb --backend sci scripts/run-task.cljk gen-compute-golden`; assert no drift with `git diff --exit-code`.")}]
   (io/make-parents (io/file golden-fixture))
   (spit golden-fixture (json/generate-string golden {:pretty true}))
   (println (format "  ✓ wrote %s" golden-fixture))
@@ -87,5 +87,5 @@
   (println (format "    output-hash   %s" (get golden "expected-output-hash"))))
 
 (println "── compute-golden — kami.cartpole-math + kami.physics-compute single source ──")
-(println "  regenerate: nbb scripts/run-task.cljk gen-compute-golden")
-(println "  no-drift:   nbb scripts/run-task.cljk gen-compute-golden && git diff --exit-code")
+(println "  regenerate: kbb --backend sci scripts/run-task.cljk gen-compute-golden")
+(println "  no-drift:   kbb --backend sci scripts/run-task.cljk gen-compute-golden && git diff --exit-code")
