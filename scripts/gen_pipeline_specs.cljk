@@ -8,7 +8,7 @@
 ;;   bb gen-pipeline-specs --write    # write fixtures/pipeline_specs.edn
 ;;   bb gen-pipeline-specs --strict   # throw on drift
 (require '[kami.pipelines :as pl]
-         '[clojure.edn :as edn]
+         '[kotoba.lang.edn :as edn]
          '[clojure.java.io :as io]
          '[kotoba.pprint :as pprint])
 
