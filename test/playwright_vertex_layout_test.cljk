@@ -34,7 +34,7 @@
    Skipping: if Chrome or WebGPU is absent this prints a loud SKIP and does not
    fail — but it also asserts the reason is a recognized unavailability, so a
    silent \"0 assertions, all good\" cannot stand in for a run that never happened."
-  (:require [cheshire.core :as json]
+  (:require [kotoba.bytes :as kbytes] [cheshire.core :as json]
             [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is run-tests testing]]
             [kami.webgpu.ir :as ir]
@@ -48,7 +48,7 @@
   [html]
   (let [srv (com.sun.net.httpserver.HttpServer/create
              (java.net.InetSocketAddress. "127.0.0.1" 0) 0)
-        bytes (.getBytes ^String html "UTF-8")]
+        bytes (kbytes/utf8-bytes ^String html)]
     (.createContext srv "/"
       (reify com.sun.net.httpserver.HttpHandler
         (handle [_ ex]

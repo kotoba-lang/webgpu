@@ -1,5 +1,5 @@
 (ns skinned-submission-cache-test
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.io :as io]
             [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is run-tests]]))
 
