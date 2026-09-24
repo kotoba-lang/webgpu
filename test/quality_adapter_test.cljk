@@ -1,5 +1,5 @@
 (ns quality-adapter-test
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.webgpu.quality :as quality]))
 
 (def graph {:targets {:shadow {:depth "depth32float" :size [2048 2048]}}

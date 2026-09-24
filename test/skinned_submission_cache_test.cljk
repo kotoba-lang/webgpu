@@ -1,7 +1,7 @@
 (ns skinned-submission-cache-test
   (:require [clojure.java.io :as io]
             [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is run-tests]]))
+            [kotoba.test :refer [deftest is run-tests]]))
 
 (deftest cached-overlay-contract-shares-palette-and-reuses-resources
   (let [source (slurp (io/file "src/kami/webgpu/mesh.cljk"))]

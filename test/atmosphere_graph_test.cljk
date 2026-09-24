@@ -18,7 +18,7 @@
    require it and ask the graphs for their passes — the same constraint
    graph_blend_test.clj documents."
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is run-tests testing]]))
+            [kotoba.test :refer [deftest is run-tests testing]]))
 
 (def executor "src/kami/webgpu.cljk")
 (def source (slurp executor))

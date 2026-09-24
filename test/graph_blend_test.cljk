@@ -19,7 +19,7 @@
 
    NOT checked here (needs a real WebGPU device, no gate on this repo can do it):
    that :alpha actually composites correctly on screen."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kotoba.io :as io]
             [kotoba.lang.text :as str]
             [kami.pipelines :as pl]))

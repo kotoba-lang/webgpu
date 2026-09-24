@@ -1,5 +1,5 @@
 (ns submission-packet-test
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.webgpu.submission :as submission]))
 
 (defn instance [i]

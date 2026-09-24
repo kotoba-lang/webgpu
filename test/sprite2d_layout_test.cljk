@@ -3,7 +3,7 @@
    the renderer would draw, without a canvas. Run on the JVM via `kbb -M:test`. These guard the
    exact bugs a manual screenshot would catch: the W/S-up inversion, the raging-gorilla swap,
    painter order, and camera follow."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.sprite2d.layout :as layout]))
 
 (def W 800.0)

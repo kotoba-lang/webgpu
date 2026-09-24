@@ -36,7 +36,7 @@
    silent \"0 assertions, all good\" cannot stand in for a run that never happened."
   (:require [cheshire.core :as json]
             [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is run-tests testing]]
+            [kotoba.test :refer [deftest is run-tests testing]]
             [kami.webgpu.ir :as ir]
             [playwright-clj.core :as pw]))
 

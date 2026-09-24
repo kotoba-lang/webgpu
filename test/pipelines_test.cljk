@@ -27,7 +27,7 @@
    therefore written, validated, and unreachable. This gate does not assert a
    live consumer exists — that would just fail every run — but it must not imply
    one does either."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kotoba.io :as io]
             [kami.pipelines :as pl]))
 

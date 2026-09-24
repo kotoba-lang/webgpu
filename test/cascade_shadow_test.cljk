@@ -1,7 +1,7 @@
 (ns cascade-shadow-test
   (:require [babashka.process :as p]
             [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is run-tests]]
+            [kotoba.test :refer [deftest is run-tests]]
             [kotoba.shaders :as shaders]))
 
 (defn- naga-valid? [name wgsl]

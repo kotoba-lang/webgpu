@@ -21,7 +21,7 @@
   on purpose (to carry u=0 and u=1 at the same place) and a creased ring is
   duplicated on purpose too; both are the SAME POINT and the topology has to be
   judged on the point, not the index."
-  (:require [clojure.test :refer [deftest is testing run-tests]]
+  (:require [kotoba.test :refer [deftest is testing run-tests]]
             [kami.webgpu.geometry :as g]))
 
 ;; --- helpers -----------------------------------------------------------------

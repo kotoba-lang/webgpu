@@ -1,7 +1,7 @@
 (ns playwright-frame-test
   "Pixel-verify a WHOLE kami.scene2d frame in one headless WebGL2 render: the sky gradient pass +
    the instanced quad pass (sprites + floating text + a particle) — the full Canvas2D→GPU-2D frame."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.playwright :as pw]
             [kami.scene2d :as s2]
             [kami.sprite-gpu :as sg]

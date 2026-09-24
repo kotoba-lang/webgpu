@@ -6,7 +6,7 @@
          '[kami.netsync :as net]
          '[kami.level :as level]
          '[kami.webgpu.ir :as ir]
-         '[clojure.test :refer [deftest is testing run-tests]])
+         '[kotoba.test :refer [deftest is testing run-tests]])
 
 (deftest fsm-advance
   (is (= :move (fsm/advance fsm/default-player-fsm :idle #{:moving})))

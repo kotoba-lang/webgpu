@@ -3,7 +3,7 @@
    ported shader must be token-equivalent to the committed kami-render shader it mirrors (same program
    ⇒ renders identically), so the EDN can become the single source. Reads the originals from the
    co-located kami-engine checkout (skips if absent, same policy as the geometry goldens)."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kotoba.lang.text :as str]
             [kotoba.io :as io]
             [kami.render-shaders :as rs]))

@@ -17,7 +17,7 @@
       via kami.webgpu.ir/default-geometry) and the REAL mesh shaders (kami.webgl's own GLSL
       strings) -- proving the fixed pipeline actually puts non-background pixels on screen with
       realistic parameters, not just synthetic ones."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.playwright :as pw]
             [kami.webgpu.geometry :as geom]
             [cheshire.core :as json]))
