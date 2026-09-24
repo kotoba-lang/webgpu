@@ -11,7 +11,7 @@
 (require '[kami.shaders :as sh]
          '[kami.render-shaders :as rs]
          '[kotoba.lang.text :as str]
-         '[clojure.java.io :as io])
+         '[kotoba.io :as io])
 
 (def lit-native    "../kami-engine/kami-webgpu-rs/src")          ;; isekai lit renderer (native)
 (def render-native "../kami-engine/kami-render/src/shaders")     ;; open-world renderer (native)
@@ -38,13 +38,13 @@
 (when (some #{"--write"} *command-line-args*)
   (doseq [{:keys [wgsl fixture native]} all]
     (when fixture (io/make-parents (io/file fixture)) (spit fixture wgsl))
-    (when (.exists (io/file (.getParent (io/file native)))) (spit native wgsl)))
+    (when (io/exists? (io/file (io/parent (io/file native)))) (spit native wgsl)))
   (println (format "wrote %d shaders (web fixtures + native src where co-located)" (count all))))
 
 (println "── shaders — kami.wgsl EDN ↔ native .wgsl single source ──")
 (let [results (for [{:keys [name wgsl native]} all]
                 (let [f (io/file native)]
-                  {:name name :exists (.exists f) :match (and (.exists f) (= (canon (slurp f)) (canon wgsl)))}))
+                  {:name name :exists (io/exists? f) :match (and (io/exists? f) (= (canon (slurp f)) (canon wgsl)))}))
       present (filter :exists results)]
   (doseq [{:keys [name exists match]} results]
     (when exists (println (format "  %s %s" (if match "✓" "✗ DRIFT") name))))

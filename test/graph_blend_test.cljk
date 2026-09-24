@@ -20,7 +20,7 @@
    NOT checked here (needs a real WebGPU device, no gate on this repo can do it):
    that :alpha actually composites correctly on screen."
   (:require [clojure.test :refer [deftest is run-tests]]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [kotoba.lang.text :as str]
             [kami.pipelines :as pl]))
 
@@ -42,8 +42,8 @@
 
 (deftest blend-vocabulary-matches-pipeline-table
   (let [f (io/file executor)]
-    (is (.exists f) (str executor " must exist"))
-    (when (.exists f)
+    (is (io/exists? f) (str executor " must exist"))
+    (when (io/exists? f)
       (let [declared (declared-blend-modes (slurp f))]
         (is (= pl/valid-blends declared)
             (str "executor blend modes " declared

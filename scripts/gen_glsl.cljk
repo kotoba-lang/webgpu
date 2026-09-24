@@ -13,7 +13,7 @@
          '[kami.sprite-gpu :as sg]
          '[kami.sky :as sky]
          '[kotoba.lang.text :as str]
-         '[clojure.java.io :as io]
+         '[kotoba.io :as io]
          '[babashka.fs :as fs]
          '[babashka.process :as p])
 
@@ -30,7 +30,7 @@
   (let [outputs (for [{:keys [name entries]} shaders
                       [_ stage] entries]
                   (str "fixtures/glsl/" name "." stage))
-        missing (remove #(.exists (io/file %)) outputs)]
+        missing (remove #(io/exists? (io/file %)) outputs)]
     (println "  skip: naga not installed; committed GLSL fixtures are used")
     (when (seq missing)
       (throw (ex-info "GLSL fixtures missing and naga is unavailable" {:missing (vec missing)}))))
@@ -42,7 +42,7 @@
                  out (str "fixtures/glsl/" name "." stage)]   ;; .vert/.frag — naga picks the GLSL stage by extension
              (spit wf wgsl)
              (let [r (p/sh "naga" wf out "--entry-point" entry "--profile" "es300")
-                   ver (when (.exists (io/file out)) (str/trim (first (str/split-lines (slurp out)))))
+                   ver (when (io/exists? (io/file out)) (str/trim (first (str/split-lines (slurp out)))))
                    ok  (and (zero? (:exit r)) (= ver "#version 300 es"))]
                (println (format "  %s %-24s %s" (if ok "✓" "✗") out (or ver (str/trim (:err r)))))
                ok))))]
