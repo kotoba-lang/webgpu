@@ -10,7 +10,7 @@
 (require '[kami.pipelines :as pl]
          '[clojure.edn :as edn]
          '[clojure.java.io :as io]
-         '[clojure.pprint :as pprint])
+         '[kotoba.pprint :as pprint])
 
 (def fixture "fixtures/pipeline_specs.edn")
 
