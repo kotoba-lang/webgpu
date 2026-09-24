@@ -13,7 +13,7 @@
    kami.playwright harness every other playwright_*_test.clj in this repo uses) and measure its
    actual on-screen bounding-box width/height by pixel readback, so this is a real render
    assertion, not just a unit check on the intermediate :size data."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.playwright :as pw]
             [kami.sprite-gpu :as sg]
             [cheshire.core :as json]))

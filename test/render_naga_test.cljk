@@ -4,7 +4,7 @@
    is valid — metahuman_skin was a real naga-invalid shipping shader (array<f32,64> in a uniform).
    This naga-checks all 16 from the EDN when naga is available. Skips if naga is
    absent, matching the repository-local no-Rust-toolchain CI policy."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kotoba.lang.text :as str]
             [babashka.process :as p]
             [kami.render-shaders :as rs]))

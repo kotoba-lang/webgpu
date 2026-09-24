@@ -24,7 +24,7 @@
    NOT checked here (needs a real WebGPU device): that a custom layout actually
    draws. `vertex-layout-declared-layout-builds-on-real-gpu` in
    playwright_vertex_layout_test.clj does that on hardware."
-  (:require [clojure.test :refer [deftest is run-tests testing]]
+  (:require [kotoba.test :refer [deftest is run-tests testing]]
             [kotoba.lang.text :as str]
             [kami.webgpu.ir :as ir]))
 

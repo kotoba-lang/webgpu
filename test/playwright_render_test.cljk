@@ -3,7 +3,7 @@
    WebGL2 browser (via playwright-clj) and read back pixels — proving the Canvas2D→GPU-2D path
    actually DRAWS (instanced SDF quads), not just compiles. The GL calls mirror kami.webgl/sprite-
    renderer: instance buffer (12 f32/quad), attribs loc0-4, std140 viewport block, drawArraysInstanced."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.playwright :as pw]
             [kami.sprite-gpu :as sg]
             [cheshire.core :as json]))

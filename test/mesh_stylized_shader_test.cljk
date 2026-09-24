@@ -1,6 +1,6 @@
 (ns mesh-stylized-shader-test
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is run-tests]]))
+            [kotoba.test :refer [deftest is run-tests]]))
 
 (def source (slurp "src/kami/webgpu/mesh.cljk"))
 

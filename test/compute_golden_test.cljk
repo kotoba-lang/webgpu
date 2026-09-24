@@ -28,7 +28,7 @@
   in `kami.cartpole-math` (shared by the gen script and this test), and only the gen script's
   separate process (SDK first on its classpath) calls the live emitter. This keeps the parity
   guarantee without a namespace collision."
-  (:require [clojure.test :refer [deftest is run-tests testing]]
+  (:require [kotoba.test :refer [deftest is run-tests testing]]
             [kotoba.lang.text :as str]
             [cheshire.core :as json]
             [kami.cartpole-math :as cm]))

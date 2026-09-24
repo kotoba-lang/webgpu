@@ -1,7 +1,7 @@
 (ns gpu-test
   "Tests for the capability-gated GPU render graph: one EDN graph, resolved per backend tier so the
    raster core renders everywhere while compute passes (RT / splat / strand) drop on WebGL2."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.gpu :as gpu]))
 
 ;; a graph spanning the raster core + GPU-2D sprites + compute features.

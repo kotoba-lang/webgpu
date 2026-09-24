@@ -1,7 +1,7 @@
 (ns playwright-webgl-test
   "Verify, in a REAL headless WebGL2 browser (via playwright-clj), that the GLSL bb gen-glsl
    transpiles from the EDN shaders actually compiles + links — the driver-level check naga can't do."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.playwright :as pw]
             [cheshire.core :as json]))
 

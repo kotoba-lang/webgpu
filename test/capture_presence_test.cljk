@@ -1,7 +1,7 @@
 (ns capture-presence-test
   (:require [clojure.java.io :as io]
             [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is run-tests]]))
+            [kotoba.test :refer [deftest is run-tests]]))
 
 (deftest presence-is-stamped-only-after-submit-and-cleared-per-frame
   (let [source (slurp (io/file "src/kami/webgpu.cljk"))

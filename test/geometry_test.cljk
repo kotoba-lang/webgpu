@@ -2,7 +2,7 @@
   "JVM golden tests for kami.webgpu.geometry — the canonical cross-platform mesh source. These
    pin vertex/index counts, watertight index bounds, the sphere's radius invariant, and
    determinism, so the native renderer can match this fixture instead of re-deriving geometry."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [cheshire.core :as json]
             [kami.webgpu.geometry :as g]))
 

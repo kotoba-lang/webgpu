@@ -4,7 +4,7 @@
    kami.webgl.cljs here didn't — see CHANGELOG.md): the capability-query fns give real answers on
    the JVM, and the browser-only executors fail fast with a clear error instead of an opaque
    'js/navigator is unbound' if this namespace is ever loaded transitively on the JVM."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.webgl :as webgl]))
 
 (deftest webgl-capability-data-is-cljc

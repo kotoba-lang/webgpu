@@ -5,7 +5,7 @@
    here MUST reproduce the original constants byte-for-byte (so a frame that omits them renders
    identically). If someone edits a default, this test fails — that's the point: the look is
    data now, and the data is pinned to the historical render."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.webgpu.ir :as ir]
             [kami.webgpu.geometry :as geom]
             [kotoba.render.terrain-biome :as terrain-biome]))

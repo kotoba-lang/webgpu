@@ -3,7 +3,7 @@
    game expects: operator/precedence, function calls, vecN<f32> constructors, kebab→snake idents,
    statements, and a real lighting fragment function. The compiler being .cljc, this same source is
    what the browser (shadow-cljs) emits, so the test guards the live shader too."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kotoba.lang.text :as str]
             [kami.wgsl :as w]))
 

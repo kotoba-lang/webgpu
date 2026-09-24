@@ -2,7 +2,7 @@
   "Pixel-level proof that :anim actually MOVES the GPU-2D render between frames (not just the unit
    math): render the same animated sprite at two ticks in a real headless WebGL2 browser and confirm
    the drawn shape's red-pixel centroid shifts by the bob amplitude. End-to-end anim verification."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.playwright :as pw]
             [kami.sprite-gpu :as sg]
             [cheshire.core :as json]))

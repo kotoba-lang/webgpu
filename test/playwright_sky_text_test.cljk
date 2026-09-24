@@ -2,7 +2,7 @@
   "Pixel-verify the two GPU renderers that complete the Canvas2D→GPU-2D port: the sky gradient pass
    (kami.sky, a fullscreen kami.wgsl shader) and GPU text (kami.text 7-segment glyphs → rect quads
    through the sprite pipeline). Both rendered in a real headless WebGL2 browser via playwright-clj."
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [kotoba.test :refer [deftest is run-tests]]
             [kami.playwright :as pw]
             [kami.text :as txt]
             [kami.sprite-gpu :as sg]
