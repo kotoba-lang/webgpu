@@ -30,7 +30,7 @@
   (:require [kami.cartpole-math :as cm]
             [kami.physics-compute :as pc]
             [cheshire.core :as json]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [kotoba.lang.text :as str]))
 
 (def ^:private wgsl-fixture  "fixtures/cartpole-compute-step.wgsl")
