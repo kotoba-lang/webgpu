@@ -1,5 +1,5 @@
 (ns render-style-test
-  (:require [kotoba.test :refer [deftest is run-tests testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is run-tests testing]]
             [kami.webgpu.render-style :as style]))
 
 (deftest omission-is-backwards-compatible
@@ -34,11 +34,11 @@
     (is (= 0.06 (:toon-smooth p)))
     (is (= 0.06 (:specular-smooth p)))
     (is (= 0.72 (:rim-intensity p)) "material override survives scene envelope lowering"))
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (style/scene-style->profile {:contract :kotoba.render/style-v2
                                             :profile :stylized
                                             :shading {:model :toon-pbr}})))
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (style/scene-style->profile
                 {:contract :kotoba.render/style-v1 :profile :stylized
                  :shading {:model :toon-pbr}
@@ -64,7 +64,7 @@
     (is (= [0.8 0.9 1.0] (:rim-color u)))
     (is (= 0.6 (:rim-intensity u))))
   (is (thrown-with-msg?
-       clojure.lang.ExceptionInfo #"not implemented by kami.webgpu.mesh"
+       kerror/ExceptionInfo #"not implemented by kami.webgpu.mesh"
        (style/shader-uniforms
         {:contract :kotoba.render/style-v1 :profile :stylized
          :shading {:model :toon-pbr}
@@ -73,7 +73,7 @@
 
 (deftest profiles-are-validated-before-gpu-lowering
   (testing "unknown styles cannot silently fall through"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid render-style profile"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"invalid render-style profile"
                           (style/render-profile {:render-style :cinematic}))))
   (doseq [bad [{:render-style :stylized :shade-color [1 0]}
                {:render-style :stylized :rim-color [1 1 2]}

@@ -9,7 +9,7 @@
 ;;   bb gen-pipeline-specs --strict   # throw on drift
 (require '[kami.pipelines :as pl]
          '[kotoba.lang.edn :as edn]
-         '[clojure.java.io :as io]
+         '[kotoba.io :as io]
          '[kotoba.pprint :as pprint])
 
 (def fixture "fixtures/pipeline_specs.edn")
@@ -23,7 +23,7 @@
   (with-out-str (pprint/pprint x)))
 
 (defn read-fixture [f]
-  (when (.exists f)
+  (when (io/exists? f)
     (edn/read-string (slurp f))))
 
 (let [specs (pipeline-specs)
@@ -40,7 +40,7 @@
     :else
     (do
       (println "-- pipeline_specs.edn -- kami.pipelines EDN fixture")
-      (if-not (.exists f)
+      (if-not (io/exists? f)
         (do
           (println "  (no committed fixture yet -- run --write)")
           (when (args "--strict")
